@@ -35,6 +35,7 @@ import { VRButton } from '../../libs/three.js/extra/VRButton.js';
 
 import JSON5 from "../../libs/json5-2.1.3/json5.mjs";
 
+import CameraControls from "../../libs/camera-controls/dist/camera-controls.module.js";
 
 export class Viewer extends EventDispatcher{
 	
@@ -425,6 +426,25 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setControls(controls){
+		if (controls == this.cameraControls) {
+			if (controls !== this.controls) {
+				if (this.controls) {
+					this.controls.enabled = false;
+					this.inputHandler.removeInputListener(this.controls);
+				}
+				this.controls = controls;
+				this.controls.enabled = true;
+				console.log(this.scene.view.position)
+				
+				this.controls.connect(this.renderArea);
+			}
+			return;
+		} else {
+			if (this.controls == this.cameraControls) {
+				this.cameraControls.disconnect()
+			}
+		}
+
 		if (controls !== this.controls) {
 			if (this.controls) {
 				this.controls.enabled = false;
@@ -1155,7 +1175,11 @@ export class Viewer extends EventDispatcher{
 			this.vrControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
 
-
+		{ // create CAMERA CONTROLS
+			CameraControls.install( { THREE: THREE } );
+			this.cameraControls = new CameraControls(this.scene);
+			this.cameraControls.enabled = false;
+		}
 	};
 
 	toggleSidebar () {
@@ -1773,7 +1797,10 @@ export class Viewer extends EventDispatcher{
 		this.scene.cameraP.fov = this.fov;
 		
 		let controls = this.getControls();
-		if (controls === this.deviceControls) {
+		if (controls === this.cameraControls) {
+			this.controls.setScene(scene);
+			this.controls.update(delta);
+		}else if (controls === this.deviceControls) {
 			this.controls.setScene(scene);
 			this.controls.update(delta);
 

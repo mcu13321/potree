@@ -4,6 +4,10 @@
  * (c) 2017 @yomotsu
  * Released under the MIT License.
  */
+'use strict';
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
 // see https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/buttons#value
 const MOUSE_BUTTON = {
     LEFT: 1,
@@ -174,12 +178,7 @@ function notSupportedInOrthographicCamera(camera, message) {
 }
 
 class EventDispatcher {
-
-    constructor() {
-        this._listeners = {};
-    }
-
-    // _listeners = {};
+    _listeners = {};
     /**
      * Adds the specified event listener.
      * @param type event name
@@ -251,7 +250,7 @@ class EventDispatcher {
 
 const VERSION = '3.1.2'; // will be replaced with `version` in package.json during the build process.
 const TOUCH_DOLLY_FACTOR = 1 / 8;
-const isMac = globalThis && globalThis.navigator && /Mac/.test(globalThis.navigator.platform);
+const isMac = /Mac/.test(globalThis?.navigator?.platform);
 let THREE;
 let _ORIGIN;
 let _AXIS_Y;
@@ -359,7 +358,7 @@ class CameraControls extends EventDispatcher {
      * ```
      * @category Properties
      */
-    // minPolarAngle; // radians
+    minPolarAngle = 0; // radians
     /**
      * Maximum vertical angle in radians.
      * The angle has to be between `.maxPolarAngle` and `Math.PI` inclusive.
@@ -371,7 +370,7 @@ class CameraControls extends EventDispatcher {
      * ```
      * @category Properties
      */
-    // maxPolarAngle; // radians
+    maxPolarAngle = Math.PI; // radians
     /**
      * Minimum horizontal angle in radians.
      * The angle has to be less than `.maxAzimuthAngle`.
@@ -383,7 +382,7 @@ class CameraControls extends EventDispatcher {
      * ```
      * @category Properties
      */
-    // minAzimuthAngle; // radians
+    minAzimuthAngle = -Infinity; // radians
     /**
      * Maximum horizontal angle in radians.
      * The angle has to be greater than `.minAzimuthAngle`.
@@ -395,101 +394,101 @@ class CameraControls extends EventDispatcher {
      * ```
      * @category Properties
      */
-    // maxAzimuthAngle; // radians
+    maxAzimuthAngle = Infinity; // radians
     // How far you can dolly in and out ( PerspectiveCamera only )
     /**
      * Minimum distance for dolly. The value must be higher than `0`. Default is `Number.EPSILON`.
      * PerspectiveCamera only.
      * @category Properties
      */
-    // minDistance;
+    minDistance = Number.EPSILON;
     /**
      * Maximum distance for dolly. The value must be higher than `minDistance`. Default is `Infinity`.
      * PerspectiveCamera only.
      * @category Properties
      */
-    // maxDistance;
+    maxDistance = Infinity;
     /**
      * `true` to enable Infinity Dolly for wheel and pinch. Use this with `minDistance` and `maxDistance`
      * If the Dolly distance is less (or over) than the `minDistance` (or `maxDistance`), `infinityDolly` will keep the distance and pushes the target position instead.
      * @category Properties
      */
-    // infinityDolly;
+    infinityDolly = false;
     /**
      * Minimum camera zoom.
      * @category Properties
      */
-    // minZoom;
+    minZoom = 0.01;
     /**
      * Maximum camera zoom.
      * @category Properties
      */
-    // maxZoom;
+    maxZoom = Infinity;
     /**
      * Approximate time in seconds to reach the target. A smaller value will reach the target faster.
      * @category Properties
      */
-    // smoothTime;
+    smoothTime = 0.25;
     /**
      * the smoothTime while dragging
      * @category Properties
      */
-    // draggingSmoothTime;
+    draggingSmoothTime = 0.125;
     /**
      * Max transition speed in unit-per-seconds
      * @category Properties
      */
-    // maxSpeed;
+    maxSpeed = Infinity;
     /**
      * Speed of azimuth (horizontal) rotation.
      * @category Properties
      */
-    // azimuthRotateSpeed;
+    azimuthRotateSpeed = 1.0;
     /**
      * Speed of polar (vertical) rotation.
      * @category Properties
      */
-    // polarRotateSpeed;
+    polarRotateSpeed = 1.0;
     /**
      * Speed of mouse-wheel dollying.
      * @category Properties
      */
-    // dollySpeed;
+    dollySpeed = 1.0;
     /**
      * `true` to invert direction when dollying or zooming via drag
      * @category Properties
      */
-    // dollyDragInverted;
+    dollyDragInverted = false;
     /**
      * Speed of drag for truck and pedestal.
      * @category Properties
      */
-    // truckSpeed;
+    truckSpeed = 2.0;
     /**
      * `true` to enable Dolly-in to the mouse cursor coords.
      * @category Properties
      */
-    // dollyToCursor;
+    dollyToCursor = false;
     /**
      * @category Properties
      */
-    // dragToOffset;
+    dragToOffset = false;
     /**
      * Friction ratio of the boundary.
      * @category Properties
      */
-    // boundaryFriction;
+    boundaryFriction = 0.0;
     /**
      * Controls how soon the `rest` event fires as the camera slows.
      * @category Properties
      */
-    // restThreshold;
+    restThreshold = 0.01;
     /**
      * An array of Meshes to collide with camera.
      * Be aware colliderMeshes may decrease performance. The collision test uses 4 raycasters from the camera since the near plane has 4 corners.
      * @category Properties
      */
-    // colliderMeshes;
+    colliderMeshes = [];
     // button configs
     /**
      * User's mouse input config.
@@ -509,7 +508,7 @@ class CameraControls extends EventDispatcher {
      *   - `ZOOM` for Orthographic camera, and can't set `DOLLY`.
      * @category Properties
      */
-    // mouseButtons;
+    mouseButtons;
     /**
      * User's touch input config.
      *
@@ -525,130 +524,119 @@ class CameraControls extends EventDispatcher {
      *   - `TOUCH_ZOOM_TRUCK` for Orthographic camera, and can't set `TOUCH_DOLLY_TRUCK` and `TOUCH_DOLLY`.
      * @category Properties
      */
-    // touches;
+    touches;
     /**
      * Force cancel user dragging.
      * @category Methods
      */
     // cancel will be overwritten in the constructor.
-    // cancel;
+    cancel = () => { };
     /**
      * Still an experimental feature.
      * This could change at any time.
      * @category Methods
      */
-    // lockPointer;
+    lockPointer;
     /**
      * Still an experimental feature.
      * This could change at any time.
      * @category Methods
      */
-    // unlockPointer;
-    // _enabled;
-    // _camera;
-    // _yAxisUpSpace;
-    // _yAxisUpSpaceInverse;
-    // _state;
-    // _domElement;
-    // _viewport;
-    // _target;
-    // _targetEnd;
-    // _focalOffset;
-    // _focalOffsetEnd;
-    // _spherical;
-    // _sphericalEnd;
-    // _lastDistance;
-    // _zoom;
-    // _zoomEnd;
-    // _lastZoom;
-    // _cameraUp0;
-    // _target0;
-    // _position0;
-    // _zoom0;
-    // _focalOffset0;
-    // _dollyControlCoord;
-    // _changedDolly;
-    // _changedZoom;
-    // _nearPlaneCorners;
-    // _hasRested;
-    // _boundary;
-    // _boundaryEnclosesCamera;
-    // _needsUpdate;
-    // _updatedLastTime;
-    // _elementRect;
-    // _isDragging;
-    // _dragNeedsUpdate;
-    // _activePointers;
-    // _lockedPointer;
-    // _interactiveArea;
-    // _isUserControllingRotate;
-    // _isUserControllingDolly;
-    // _isUserControllingTruck;
-    // _isUserControllingOffset;
-    // _isUserControllingZoom;
-    // _lastDollyDirection;
-    // _thetaVelocity;
-    // _phiVelocity;
-    // _radiusVelocity;
-    // _targetVelocity;
-    // _focalOffsetVelocity;
-    // _zoomVelocity;
-    constructor(scene) {
+    unlockPointer;
+    _enabled = true;
+    _camera;
+    _yAxisUpSpace;
+    _yAxisUpSpaceInverse;
+    _state = ACTION.NONE;
+    _domElement;
+    _viewport = null;
+    // the location of focus, where the object orbits around
+    _target;
+    _targetEnd;
+    _focalOffset;
+    _focalOffsetEnd;
+    // rotation and dolly distance
+    _spherical;
+    _sphericalEnd;
+    _lastDistance;
+    _zoom;
+    _zoomEnd;
+    _lastZoom;
+    // reset
+    _cameraUp0;
+    _target0;
+    _position0;
+    _zoom0;
+    _focalOffset0;
+    _dollyControlCoord;
+    _changedDolly = 0;
+    _changedZoom = 0;
+    // collisionTest uses nearPlane. ( PerspectiveCamera only )
+    _nearPlaneCorners;
+    _hasRested = true;
+    _boundary;
+    _boundaryEnclosesCamera = false;
+    _needsUpdate = true;
+    _updatedLastTime = false;
+    _elementRect = new DOMRect();
+    _isDragging = false;
+    _dragNeedsUpdate = true;
+    _activePointers = [];
+    _lockedPointer = null;
+    _interactiveArea = new DOMRect(0, 0, 1, 1);
+    // Use draggingSmoothTime over smoothTime while true.
+    // set automatically true on user-dragging start.
+    // set automatically false on programmable methods call.
+    _isUserControllingRotate = false;
+    _isUserControllingDolly = false;
+    _isUserControllingTruck = false;
+    _isUserControllingOffset = false;
+    _isUserControllingZoom = false;
+    _lastDollyDirection = DOLLY_DIRECTION.NONE;
+    // velocities for smoothDamp
+    _thetaVelocity = { value: 0 };
+    _phiVelocity = { value: 0 };
+    _radiusVelocity = { value: 0 };
+    _targetVelocity = new THREE.Vector3();
+    _focalOffsetVelocity = new THREE.Vector3();
+    _zoomVelocity = { value: 0 };
+    /**
+     * @deprecated Use `cameraControls.mouseButtons.left = CameraControls.ACTION.SCREEN_PAN` instead.
+     */
+    set verticalDragToForward(_) {
+        console.warn('camera-controls: `verticalDragToForward` was removed. Use `mouseButtons.left = CameraControls.ACTION.SCREEN_PAN` instead.');
+    }
+    /**
+     * Creates a `CameraControls` instance.
+     *
+     * Note:
+     * You **must install** three.js before using camera-controls. see [#install](#install)
+     * Not doing so will lead to runtime errors (`undefined` references to THREE).
+     *
+     * e.g.
+     * ```
+     * CameraControls.install( { THREE } );
+     * const cameraControls = new CameraControls( camera, domElement );
+     * ```
+     *
+     * @param camera A `THREE.PerspectiveCamera` or `THREE.OrthographicCamera` to be controlled.
+     * @param domElement A `HTMLElement` for the draggable area, usually `renderer.domElement`.
+     * @category Constructor
+     */
+    constructor(camera, domElement) {
         super();
         // Check if the user has installed THREE
         if (typeof THREE === 'undefined') {
             console.error('camera-controls: `THREE` is undefined. You must first run `CameraControls.install( { THREE: THREE } )`. Check the docs for further information.');
         }
-        
-        // 初始化所有类字段
-        this.sceneControls = new THREE.Scene();
-        this.scene = scene
-        this.minPolarAngle = 0; // radians
-        this.maxPolarAngle = Math.PI; // radians
-        this.minAzimuthAngle = -Infinity; // radians
-        this.maxAzimuthAngle = Infinity; // radians
-        this.minDistance = Number.EPSILON;
-        this.maxDistance = Infinity;
-        this.infinityDolly = false;
-        this.minZoom = 0.01;
-        this.maxZoom = Infinity;
-        this.smoothTime = 0.25;
-        this._activePointers = [];
-        this.draggingSmoothTime = 0.125;
-        this.maxSpeed = Infinity;
-        this.azimuthRotateSpeed = 1.0;
-        this.polarRotateSpeed = 1.0;
-        this.dollySpeed = 1.0;
-        this.dollyDragInverted = false;
-        this.truckSpeed = 2.0;
-        this.dollyToCursor = true;
-        this.dragToOffset = false;
-        this.boundaryFriction = 0.0;
-        this.restThreshold = 0.01;
-        this.colliderMeshes = [];
-        this.mouseButtons = undefined;
-        this.touches = undefined;
-        this._thetaVelocity = { value: 0 };
-        this._phiVelocity = { value: 0 };
-        this._radiusVelocity = { value: 0 };
-        this._targetVelocity = new THREE.Vector3();
-        this._focalOffsetVelocity = new THREE.Vector3();
-        this._zoomVelocity = { value: 0 };
-        this.cancel = () => { };
-        this.lockPointer = undefined;
-        this.unlockPointer = undefined;
-        this._elementRect = new DOMRect();
-        this._interactiveArea = new DOMRect(0, 0, 1, 1);
-        this._enabled = true;
-        this._camera = this.scene.getActiveCamera();
+        this._camera = camera;
         this._yAxisUpSpace = new THREE.Quaternion().setFromUnitVectors(this._camera.up, _AXIS_Y);
         this._yAxisUpSpaceInverse = this._yAxisUpSpace.clone().invert();
         this._state = ACTION.NONE;
-        this._domElement = null;
-        this._viewport = null;
+        // the location
         this._target = new THREE.Vector3();
         this._targetEnd = this._target.clone();
-         this._focalOffset = new THREE.Vector3();
+        this._focalOffset = new THREE.Vector3();
         this._focalOffsetEnd = this._focalOffset.clone();
         // rotation
         this._spherical = new THREE.Spherical().setFromVector3(_v3A.copy(this._camera.position).applyQuaternion(this._yAxisUpSpace));
@@ -1131,9 +1119,9 @@ class CameraControls extends EventDispatcher {
                 this._disposePointer(this._lockedPointer);
                 this._lockedPointer = null;
             }
-            this._domElement && this._domElement.ownerDocument.exitPointerLock();
-            this._domElement && this._domElement.ownerDocument.removeEventListener('pointerlockchange', onPointerLockChange);
-            this._domElement && this._domElement.ownerDocument.removeEventListener('pointerlockerror', onPointerLockError);
+            this._domElement?.ownerDocument.exitPointerLock();
+            this._domElement?.ownerDocument.removeEventListener('pointerlockchange', onPointerLockChange);
+            this._domElement?.ownerDocument.removeEventListener('pointerlockerror', onPointerLockError);
             this.cancel();
         };
         const onPointerLockChange = () => {
@@ -1181,9 +1169,9 @@ class CameraControls extends EventDispatcher {
             this._activePointers.length = 0;
             endDragging();
         };
-        // if (domElement)
-        //     this.connect(domElement);
-        // this.update(0);
+        if (domElement)
+            this.connect(domElement);
+        this.update(0);
     }
     /**
      * The camera to be controlled
@@ -2376,14 +2364,10 @@ class CameraControls extends EventDispatcher {
      * @category Methods
      */
     connect(domElement) {
-        // if (this._domElement) {
-        //     console.warn('camera-controls is already connected.');
-        //     return;
-        // }
-        this._camera = this.scene.getActiveCamera();
-        this._targetEnd = this.scene.view.getPivot().clone();
-        this.setPosition(this._camera.position.x, this._camera.position.y, this._camera.position.z);
-        
+        if (this._domElement) {
+            console.warn('camera-controls is already connected.');
+            return;
+        }
         domElement.setAttribute('data-camera-controls-version', VERSION);
         this._addAllEventListeners(domElement);
         this._getClientRect(this._elementRect);
@@ -2453,12 +2437,6 @@ class CameraControls extends EventDispatcher {
                 .add(deltaClampedTarget.multiplyScalar(1.0 - friction));
         }
     }
-
-    setScene(scene) {
-        this.scene = scene;
-        this._camera = scene.getActiveCamera();
-    }
-
     _updateNearPlaneCorners() {
         if (isPerspectiveCamera(this._camera)) {
             const camera = this._camera;
@@ -2484,7 +2462,7 @@ class CameraControls extends EventDispatcher {
             this._nearPlaneCorners[3].set(left, bottom, 0);
         }
     }
-    _truckInternal (deltaX, deltaY, dragToOffset, screenSpacePanning) {
+    _truckInternal = (deltaX, deltaY, dragToOffset, screenSpacePanning) => {
         let truckX;
         let pedestalY;
         if (isPerspectiveCamera(this._camera)) {
@@ -2515,12 +2493,12 @@ class CameraControls extends EventDispatcher {
                 this.truck(truckX, pedestalY, true);
         }
     };
-    _rotateInternal (deltaX, deltaY) {
+    _rotateInternal = (deltaX, deltaY) => {
         const theta = PI_2 * this.azimuthRotateSpeed * deltaX / this._elementRect.height; // divide by *height* to refer the resolution
         const phi = PI_2 * this.polarRotateSpeed * deltaY / this._elementRect.height;
         this.rotate(theta, phi, true);
     };
-    _dollyInternal (delta, x, y) {
+    _dollyInternal = (delta, x, y) => {
         const dollyScale = Math.pow(0.95, -delta * this.dollySpeed);
         const lastDistance = this._sphericalEnd.radius;
         const distance = this._sphericalEnd.radius * dollyScale;
@@ -2542,7 +2520,7 @@ class CameraControls extends EventDispatcher {
         }
         this._lastDollyDirection = Math.sign(-delta);
     };
-    _zoomInternal (delta, x, y) {
+    _zoomInternal = (delta, x, y) => {
         const zoomScale = Math.pow(0.95, delta * this.dollySpeed);
         const lastZoom = this._zoom;
         const zoom = this._zoom * zoomScale;
@@ -2680,4 +2658,5 @@ class CameraControls extends EventDispatcher {
     }
 }
 
-export { EventDispatcher, CameraControls as default };
+exports.EventDispatcher = EventDispatcher;
+exports.default = CameraControls;

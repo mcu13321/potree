@@ -66,6 +66,9 @@
 			material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
 			
 			viewer.fitToScreen();
+			setTimeout(() => {
+				viewer.setControls(viewer.cameraControls);
+			}, 1000);
 		});
 		
 	</script>
