@@ -48,6 +48,7 @@ export class InputHandler extends EventDispatcher {
 		this.domElement.addEventListener('mouseup', this.onMouseUp.bind(this), false);
 		this.domElement.addEventListener('mousemove', this.onMouseMove.bind(this), false);
 		this.domElement.addEventListener('mousewheel', this.onMouseWheel.bind(this), false);
+    this.domElement.addEventListener('wheel', this.onMouseWheel.bind(this), false);
 		this.domElement.addEventListener('DOMMouseScroll', this.onMouseWheel.bind(this), false); // Firefox
 		this.domElement.addEventListener('dblclick', this.onDoubleClick.bind(this));
 		this.domElement.addEventListener('keydown', this.onKeyDown.bind(this));

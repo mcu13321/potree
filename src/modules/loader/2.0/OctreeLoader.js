@@ -7,8 +7,9 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
 
 export class NodeLoader{
 
-	constructor(url){
+	constructor(url, getUrl){
 		this.url = url;
+    this.getUrl = getUrl;
 	}
 
 	async load(node){
@@ -35,7 +36,7 @@ export class NodeLoader{
 			let {byteOffset, byteSize} = node;
 
 
-			let urlOctree = `${this.url}/../octree.bin`;
+			let urlOctree = this.getUrl ? await this.getUrl('octree.bin') : `${this.url}/../octree.bin`;
 
 			let first = byteOffset;
 			let last = byteOffset + byteSize - 1n;
@@ -245,7 +246,7 @@ export class NodeLoader{
 	async loadHierarchy(node){
 
 		let {hierarchyByteOffset, hierarchyByteSize} = node;
-		let hierarchyPath = `${this.url}/../hierarchy.bin`;
+		let hierarchyPath = this.getUrl ? await this.getUrl('hierarchy.bin') : `${this.url}/../hierarchy.bin`;
 		
 		let first = hierarchyByteOffset;
 		let last = first + hierarchyByteSize - 1n;
@@ -384,14 +385,14 @@ export class OctreeLoader{
 		return attributes;
 	}
 
-	static async load(url){
-
-		let response = await fetch(url);
+	static async load(url, getUrl){
+    const trueUrl = getUrl ? await getUrl(url) : url;
+		let response = await fetch(trueUrl);
 		let metadata = await response.json();
 
 		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
 
-		let loader = new NodeLoader(url);
+		let loader = new NodeLoader(url, getUrl);
 		loader.metadata = metadata;
 		loader.attributes = attributes;
 		loader.scale = metadata.scale;
