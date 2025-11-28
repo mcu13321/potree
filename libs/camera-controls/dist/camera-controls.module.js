@@ -2380,9 +2380,6 @@ class CameraControls extends EventDispatcher {
         //     console.warn('camera-controls is already connected.');
         //     return;
         // }
-        this._camera = this.scene.getActiveCamera();
-        this._targetEnd = this.scene.view.getPivot().clone();
-        this.setPosition(this._camera.position.x, this._camera.position.y, this._camera.position.z);
         
         domElement.setAttribute('data-camera-controls-version', VERSION);
         this._addAllEventListeners(domElement);

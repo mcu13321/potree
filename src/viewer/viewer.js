@@ -434,7 +434,6 @@ export class Viewer extends EventDispatcher{
 				}
 				this.controls = controls;
 				this.controls.enabled = true;
-				console.log(this.scene.view.position)
 				
 				this.controls.connect(this.renderArea);
 			}
@@ -951,6 +950,11 @@ export class Viewer extends EventDispatcher{
 		this.scene.view.pitch = -Math.PI / 2;
 
 		this.fitToScreen();
+	};
+
+	setTopView4CameraControls(){
+		this.cameraControls.fitToBox(this.getBoundingBox(this.scene.pointclouds), true);
+		this.cameraControls.rotatePolarTo(-Math.PI / 2, true);
 	};
 	
 	setBottomView(){
