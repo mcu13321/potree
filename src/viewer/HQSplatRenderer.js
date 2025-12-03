@@ -117,16 +117,44 @@ export class HQSplatRenderer{
 		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
 		const originalMaterials = new Map();
 
+		const bbox = this.viewer.scene.getBoundingBox(this.viewer.scene.pointclouds);
+		const center = new THREE.Vector3();
+		bbox.getCenter(center);
+		const size = new THREE.Vector3();
+		bbox.getSize(size);
+		const maxDimension = Math.max(size.x, size.y, size.z);
+		const distanceToCenter = camera.position.distanceTo(center);
+		const nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
+		const farthestDistance = distanceToCenter + maxDimension / 2;
+
 		for(let pointcloud of visiblePointClouds){
 			originalMaterials.set(pointcloud, pointcloud.material);
 
 			if(!this.attributeMaterials.has(pointcloud)){
 				let attributeMaterial = new PointCloudMaterial();
+				if (viewer.useXRAY) {
+					attributeMaterial.useXRAY = true;
+					attributeMaterial.opacity = 0.5;
+					attributeMaterial.cameraPosition = camera.position;
+					attributeMaterial.uNear = nearestDistance;
+					attributeMaterial.uFar = farthestDistance;
+				} else {
+					attributeMaterial.useXRAY = false;
+					attributeMaterial.opacity = 1.0;
+				}
+
 				this.attributeMaterials.set(pointcloud, attributeMaterial);
 			}
 
 			if(!this.depthMaterials.has(pointcloud)){
 				let depthMaterial = new PointCloudMaterial();
+				if (viewer.useXRAY) {
+					depthMaterial.useXRAY = true;
+					depthMaterial.opacity = 0.5;
+				} else {
+					depthMaterial.useXRAY = false;
+					depthMaterial.opacity = 1.0;
+				}
 
 				depthMaterial.setDefine("depth_pass", "#define hq_depth_pass");
 				depthMaterial.setDefine("use_edl", "#define use_edl");

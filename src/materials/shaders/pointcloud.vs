@@ -129,6 +129,9 @@ varying vec3	vViewPosition;
 varying float 	vRadius;
 varying float 	vPointSize;
 
+uniform vec3 cameraPosition;
+varying float vDistance;
+
 
 float round(float number){
 	return floor(number + 0.5);
@@ -864,6 +867,8 @@ void main() {
 	vViewPosition = mvPosition.xyz;
 	gl_Position = projectionMatrix * mvPosition;
 	vLogDepth = log2(-mvPosition.z);
+
+	vDistance = length(cameraPosition - mvPosition.xyz);
 
 	//gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
 	//gl_PointSize = 5.0;

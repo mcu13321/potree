@@ -48,6 +48,7 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		this.fog = false;
 		this._treeType = treeType;
 		this._useEDL = false;
+		this._useXRAY = false;
 		this.defines = new Map();
 
 		this.ranges = new Map();
@@ -150,6 +151,10 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 			uFilterPointSourceIDClipRange:		{ type: "fv", value: [0, 65535]},
 			matcapTextureUniform: 	{ type: "t", value: this.matcapTexture },
 			backfaceCulling: { type: "b", value: false },
+			cameraPosition: { type: "3fv", value: new THREE.Vector3() },
+			uNear: { type: "f", value: 0.1 },
+			uFar: { type: "f", value: 1.0},
+			densityFactor: { type: "f", value: 2.0 },
 		};
 
 		this.classification = ClassificationScheme.DEFAULT;
@@ -250,6 +255,9 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 
 		if (this._useEDL) {
 			defines.push('#define use_edl');
+		}
+		if (this._useXRAY) {
+			defines.push('#define use_xray');
 		}
 
 		if(this.activeAttributeName){
@@ -603,6 +611,45 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		if (this._useEDL !== value) {
 			this._useEDL = value;
 			this.updateShaderSource();
+		}
+	}
+
+	get useXRAY(){
+		return this._useXRAY;
+	}
+
+	set useXRAY (value) {
+		if (this._useXRAY !== value) {
+			this._useXRAY = value;
+			this.updateShaderSource();
+		}
+	}
+
+	get uNear(){
+		return this.uniforms.uNear.value;
+	}
+	set uNear(value){
+		if (!this.uniforms.uNear.value !== value) {
+			this.uniforms.uNear.value = value;
+		}
+	}
+
+	get uFar(){
+		return this.uniforms.uFar.value;
+	}
+	set uFar(value){
+		if (!this.uniforms.uFar.value !== value) {
+			this.uniforms.uFar.value = value;
+		}
+	}
+
+	get cameraPosition(){
+		return this.uniforms.cameraPosition.value;
+	}
+
+	set cameraPosition(value){
+		if (!this.uniforms.cameraPosition.value.equals(value)) {
+			this.uniforms.cameraPosition.value.copy(value);
 		}
 	}
 

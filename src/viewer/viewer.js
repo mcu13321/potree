@@ -137,6 +137,7 @@ export class Viewer extends EventDispatcher{
 		this.edlRadius = 1.4;
 		this.edlOpacity = 1.0;
 		this.useEDL = false;
+		this.useXRAY = false;
 		this.description = "";
 
 		this.classifications = ClassificationScheme.DEFAULT;
@@ -626,6 +627,13 @@ export class Viewer extends EventDispatcher{
 		if (this.useEDL !== value) {
 			this.useEDL = value;
 			this.dispatchEvent({'type': 'use_edl_changed', 'viewer': this});
+		}
+	};
+
+	setXRAYEnabled (value) {
+		value = Boolean(value);
+		if (this.useXRAY !== value) {
+			this.useXRAY = value;
 		}
 	};
 
@@ -1930,6 +1938,7 @@ export class Viewer extends EventDispatcher{
 				this.hqRenderer = new HQSplatRenderer(this);
 			}
 			this.hqRenderer.useEDL = this.useEDL;
+			this.hqRenderer.useXRAY = this.useXRAY;
 
 			return this.hqRenderer;
 		}else{
