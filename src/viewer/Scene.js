@@ -279,6 +279,14 @@ export class Scene extends EventDispatcher{
 		});
 	};
 
+	addMeasurement2platform(measurement){
+		this.dispatchEvent({
+			'type': 'measurement_added_to_platform',
+			'scene': this,
+			'measurement': measurement
+		});
+	};
+
 	removeMeasurement (measurement) {
 		let index = this.measurements.indexOf(measurement);
 		if (index > -1) {

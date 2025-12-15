@@ -1,5 +1,6 @@
 
-#extension GL_EXT_frag_depth : enable
+// 移动端浏览器不支持GL_EXT_frag_depth扩展
+// #extension GL_EXT_frag_depth : enable
 
 // 
 // adapted from the EDL shader code from Christian Boucheny in cloud compare:
@@ -65,8 +66,8 @@ void main(){
 		vec4 dp = uProj * vec4(0.0, 0.0, -dl, 1.0);
 		float pz = dp.z / dp.w;
 		float fragDepth = (pz + 1.0) / 2.0;
-
-		gl_FragDepthEXT = fragDepth;
+		// 移动端浏览器不支持gl_FragDepthEXT扩展
+		// gl_FragDepthEXT = fragDepth;
 	}
 
 	if(depth == 0.0){

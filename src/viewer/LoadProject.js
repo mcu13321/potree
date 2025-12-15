@@ -82,14 +82,14 @@ function loadPointCloud(viewer, data){
 	return promise;
 }
 
-function loadMeasurement(viewer, data){
+export function loadMeasurement(viewer, data){
 
 	const duplicate = viewer.scene.measurements.find(measure => measure.uuid === data.uuid);
 	if(duplicate){
 		return;
 	}
 
-	const measure = new Measure();
+	const measure = new Measure(viewer);
 
 	measure.uuid = data.uuid;
 	measure.name = data.name;
@@ -102,15 +102,20 @@ function loadMeasurement(viewer, data){
 	measure.showCircle = data.showCircle;
 	measure.showAzimuth = data.showAzimuth;
 	measure.showEdges = data.showEdges;
+	measure.finished = data.finished;
 	// color
 
 	for(const point of data.points){
 		const pos = new THREE.Vector3(...point);
 		measure.addMarker(pos);
 	}
+	if (measure.name == 'point') {
+		measure.coordinateLabels.forEach(m => m.setVisible(true))
+	}
 
 	viewer.scene.addMeasurement(measure);
-
+	viewer.scene.addMeasurement2platform(measure);
+	return measure;
 }
 
 function loadVolume(viewer, data){

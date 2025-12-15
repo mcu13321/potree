@@ -100,7 +100,7 @@ function createCameraAnimationData(animation){
 	return data;
 }
 
-function createMeasurementData(measurement){
+ export function createMeasurementData(measurement){
 
 	const data = {
 		uuid: measurement.uuid,
@@ -116,6 +116,7 @@ function createMeasurementData(measurement){
 		showAzimuth: measurement.showAzimuth,
 		showEdges: measurement.showEdges,
 		color: measurement.color.toArray(),
+		finished: !!measurement.finished
 	};
 
 	return data;

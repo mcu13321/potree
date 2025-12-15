@@ -128,9 +128,9 @@ export class MeasuringTool extends EventDispatcher{
 		this.renderer = viewer.renderer;
 
 		this.addEventListener('start_inserting_measurement', e => {
-			this.viewer.dispatchEvent({
-				type: 'cancel_insertions'
-			});
+			// this.viewer.dispatchEvent({
+			// 	type: 'cancel_insertions'
+			// });
 		});
 
 		this.showLabels = true;
@@ -138,7 +138,9 @@ export class MeasuringTool extends EventDispatcher{
 		this.scene.name = 'scene_measurement';
 		this.light = new THREE.PointLight(0xffffff, 1.0);
 		this.scene.add(this.light);
-
+		this.activeMeasurement = null;
+		this.eventMeasurement = null;
+		
 		this.viewer.inputHandler.registerInteractiveScene(this.scene);
 
 		this.onRemove = (e) => { this.scene.remove(e.measurement);};
@@ -154,6 +156,53 @@ export class MeasuringTool extends EventDispatcher{
 
 		viewer.scene.addEventListener('measurement_added', this.onAdd);
 		viewer.scene.addEventListener('measurement_removed', this.onRemove);
+		this.measurementTypeName = null;
+
+		this.mouseDownPosition = null;
+		this.viewer.renderer.domElement.addEventListener('mousedown', (e) => {
+			this.mouseDownPosition = {
+				x: e.clientX,
+				y: e.clientY
+			};
+		});
+		this.viewer.renderer.domElement.addEventListener('touchstart', (e) => {
+			this.mouseDownPosition = {
+				x: e.touches[0].clientX,
+				y: e.touches[0].clientY
+			};
+		});
+
+
+
+		this.viewer.addEventListener('cancel_insertions', (e) => {
+			if (this.eventMeasurement && this.eventMeasurement.maxMarkers > 1) {
+				this.eventMeasurement?.cancel?.callback(e)
+			}
+		});
+		this.viewer.renderer.domElement.addEventListener('mouseup', (e) => {
+			if (this.eventMeasurement && this.eventMeasurement.maxMarkers > 1) {
+				this.eventMeasurement?.insertionCallback?.(e);
+			}
+		}, false);
+		this.viewer.renderer.domElement.addEventListener('touchend', (e) => {
+			if (this.eventMeasurement && this.eventMeasurement.maxMarkers > 1) {
+				e.clientX = e.changedTouches[0].clientX;
+				e.clientY = e.changedTouches[0].clientY;
+				this.eventMeasurement?.insertionCallback?.(e);
+			}
+		});
+	}
+
+	setActiveMeasurement(measurement){
+		this.activeMeasurement = measurement;
+		
+		this.viewer.scene.measurements.forEach(measurement => {
+			measurement.update();
+		});
+	}
+
+	setReadonlyStatus(readonly){
+		this.viewer.inputHandler.setMeasurementReadonlyStatus(readonly);
 	}
 
 	onSceneChange(e){
@@ -167,14 +216,26 @@ export class MeasuringTool extends EventDispatcher{
 	}
 
 	startInsertion (args = {}) {
+		this.measurementTypeName = args.name;
+		
+		this.viewer.scene.measurements.forEach(measurement => {
+			if (!measurement.finished) {
+				this.viewer.scene.removeMeasurement(measurement);
+			}
+		});
 		let domElement = this.viewer.renderer.domElement;
-
-		let measure = new Measure();
-
+		let measure = new Measure(this.viewer);
+		
 		this.dispatchEvent({
 			type: 'start_inserting_measurement',
 			measure: measure
 		});
+		this.viewer.scene.dispatchEvent({
+			type: 'measurement_selected',
+			measurement: null,
+		});
+		this.setActiveMeasurement(null)
+		this.eventMeasurement = measure;
 
 		const pick = (defaul, alternative) => {
 			if(defaul != null){
@@ -204,42 +265,124 @@ export class MeasuringTool extends EventDispatcher{
 			removeLastMarker: measure.maxMarkers > 3,
 			callback: null
 		};
-
+		
 		let insertionCallback = (e) => {
-			if (e.button === THREE.MOUSE.LEFT) {
-				measure.addMarker(measure.points[measure.points.length - 1].position.clone());
+			if (this.mouseDownPosition) {
+				const distance = Math.sqrt(
+					Math.pow(e.clientX - this.mouseDownPosition.x, 2) + 
+					Math.pow(e.clientY - this.mouseDownPosition.y, 2)
+				);
+				const hasMoved = distance > 1;
 
-				if (measure.points.length >= measure.maxMarkers) {
-					cancel.callback();
+				if ((e.button === THREE.MOUSE.LEFT || e.type === 'touchend') && !hasMoved) {
+
+					if (this.eventMeasurement.points.length >= this.eventMeasurement.maxMarkers) {
+						cancel.callback();
+					} else {
+						this.eventMeasurement.addMarker(this.eventMeasurement.points[this.eventMeasurement.points.length - 1].position.clone());
+						this.viewer.scene.dispatchEvent({
+							type: 'measurement_selected',
+							measurement: this.eventMeasurement,
+						});
+						this.setActiveMeasurement(this.eventMeasurement);
+
+						this.viewer.inputHandler.startDragging(this.eventMeasurement.spheres[this.eventMeasurement.spheres.length - 1]);
+					}
+
+	
+				} else if (e.button === THREE.MOUSE.RIGHT) {
+					cancel.callback({fromRightClick: true});	
 				}
-
-				this.viewer.inputHandler.startDragging(
-					measure.spheres[measure.spheres.length - 1]);
-			} else if (e.button === THREE.MOUSE.RIGHT) {
-				cancel.callback();
 			}
 		};
 
 		cancel.callback = e => {
+			
 			if (cancel.removeLastMarker) {
-				measure.removeMarker(measure.points.length - 1);
+				this.eventMeasurement.removeMarker(this.eventMeasurement.points.length - 1);
 			}
-			domElement.removeEventListener('mouseup', insertionCallback, false);
-			this.viewer.removeEventListener('cancel_insertions', cancel.callback);
+			// domElement.removeEventListener('mouseup', insertionCallback, false);
+			// this.viewer.removeEventListener('cancel_insertions', cancel.callback);
+			if (this.measurementTypeName == this.eventMeasurement.name) {
+				this.eventMeasurement.dispatchEvent({
+					'type': 'measure_finished',
+					'measurement': this.eventMeasurement,
+					'fromRightClick': e && !!e.fromRightClick
+				});
+			}
+			// if (e && !!e.fromRightClick && (measure.name == 'height' || measure.name == 'angle')) {
+			// 	this.viewer.scene.removeMeasurement(measure);
+			// }
 		};
 
-		if (measure.maxMarkers > 1) {
-			this.viewer.addEventListener('cancel_insertions', cancel.callback);
-			domElement.addEventListener('mouseup', insertionCallback, false);
+		measure.cancel = cancel;
+		measure.insertionCallback = insertionCallback;
+
+		measure.reStart = () => {
+			measure.removeEventListener('measure_finished', measureFinished)
+			const copyMeasurement = {
+				name: measure.name,
+				points: JSON.parse(JSON.stringify(measure.points)),
+			};
+			this.viewer.scene.removeMeasurement(measure);
+			setTimeout(() => {
+				if (this.measurementTypeName == copyMeasurement.name) {
+					this.createNewMeasure(copyMeasurement)
+				}
+			})
 		}
 
-		measure.addMarker(new THREE.Vector3(0, 0, 0));
-		this.viewer.inputHandler.startDragging(
-			measure.spheres[measure.spheres.length - 1]);
+		// if (measure.maxMarkers > 1) {
+			// this.viewer.addEventListener('cancel_insertions', cancel.callback);
+			// domElement.addEventListener('mouseup', insertionCallback, false);
+		// }
+
+		const measureFinished = (e) => {
+			measure.removeEventListener('measure_finished', measureFinished)
+			e.measurement.finished = true;
+			const copyMeasurement = {
+				name: e.measurement.name,
+				points: JSON.parse(JSON.stringify(e.measurement.points)),
+			};
+			if (!(e.measurement.name == 'length' && e.measurement.points.length < 2) 
+				&& !(e.measurement.name == 'area' && e.measurement.points.length < 3) 
+				&& !(e.fromRightClick && (measure.name == 'height' || measure.name == 'angle'))
+				&& !(e.measurement.name == 'height' && e.measurement.points.length < 2) 
+				&& !(e.measurement.name == 'angle' && e.measurement.points.length < 3) 
+			) {
+				this.viewer.scene.addMeasurement2platform(e.measurement);
+			} else {
+				this.viewer.scene.removeMeasurement(e.measurement);
+				this.update();
+			}
+			setTimeout(() => {
+				if (this.measurementTypeName == copyMeasurement.name) {
+					this.createNewMeasure(copyMeasurement)
+				}
+			})
+		}
+
+		measure.addEventListener('measure_finished', measureFinished)
+
+		const p = args.position ? new THREE.Vector3().copy(args.position) : new THREE.Vector3(100000, 100000, 0) 
+		measure.addMarker(p);
+		
+		this.viewer.inputHandler.startDragging(measure.spheres[measure.spheres.length - 1]);
 
 		this.viewer.scene.addMeasurement(measure);
 
 		return measure;
+	}
+
+	stopInsertion(){
+		this.measurementTypeName = null;
+		this.eventMeasurement = null;
+		this.viewer.inputHandler.endDragging();
+		this.viewer.scene.measurements.forEach(measurement => {
+			if (!measurement.finished) {
+				this.viewer.scene.removeMeasurement(measurement);
+			}
+		});
 	}
 	
 	update(){
@@ -262,66 +405,70 @@ export class MeasuringTool extends EventDispatcher{
 			updateAzimuth(this.viewer, measure);
 
 			// spheres
-			for(let sphere of measure.spheres){
-				let distance = camera.position.distanceTo(sphere.getWorldPosition(new THREE.Vector3()));
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-				let scale = (15 / pr);
-				sphere.scale.set(scale, scale, scale);
-			}
+			// for(let sphere of measure.spheres){
+			// 	let distance = camera.position.distanceTo(sphere.getWorldPosition(new THREE.Vector3()));
+			// 	let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
+			// 	let scale = (15 / pr);
+			// 	sphere.scale.set(scale, scale, scale);
+			// }
 
 			// labels
-			let labels = measure.edgeLabels.concat(measure.angleLabels);
-			for(let label of labels){
-				let distance = camera.position.distanceTo(label.getWorldPosition(new THREE.Vector3()));
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-				let scale = (70 / pr);
+			// let labels = measure.edgeLabels.concat(measure.angleLabels);
+			// for(let label of labels){
+			// 	let distance = camera.position.distanceTo(label.getWorldPosition(new THREE.Vector3()));
+			// 	let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
+			// 	let scale = (70 / pr);
 
-				if(Potree.debug.scale){
-					scale = (Potree.debug.scale / pr);
-				}
+			// 	if(Potree.debug.scale){
+			// 		scale = (Potree.debug.scale / pr);
+			// 	}
 
-				label.scale.set(scale, scale, scale);
-			}
+			// 	label.scale.set(scale, scale, scale);
+			// }
 
-			// coordinate labels
-			for (let j = 0; j < measure.coordinateLabels.length; j++) {
-				let label = measure.coordinateLabels[j];
-				let sphere = measure.spheres[j];
+			//coordinate labels
+			// for (let j = 0; j < measure.coordinateLabels.length; j++) {
+			// 	let label = measure.coordinateLabels[j];
+			// 	let sphere = measure.spheres[j];
 
-				let distance = camera.position.distanceTo(sphere.getWorldPosition(new THREE.Vector3()));
+			// 	let sphereWorldPos = sphere.getWorldPosition(new THREE.Vector3());
+			// 	let distance = camera.position.distanceTo(sphereWorldPos);
+			// 	// 检查sphere是否在camera后方
+			// 	// 获取从camera到sphere的向量
+			// 	let cameraToSphere = sphereWorldPos.clone().sub(camera.position);
+			// 	// 获取camera的前方向
+			// 	let cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+			// 	// 点积：如果为负，说明sphere在camera后面
+			// 	let dotProduct = cameraToSphere.dot(cameraDirection);
+			// 	if (dotProduct < 0) {
+			// 		continue
+			// 	}
 
-				let screenPos = sphere.getWorldPosition(new THREE.Vector3()).clone().project(camera);
-				screenPos.x = Math.round((screenPos.x + 1) * clientWidth / 2);
-				screenPos.y = Math.round((-screenPos.y + 1) * clientHeight / 2);
-				screenPos.z = 0;
-				screenPos.y -= 30;
 
-				let labelPos = new THREE.Vector3( 
-					(screenPos.x / clientWidth) * 2 - 1, 
-					-(screenPos.y / clientHeight) * 2 + 1, 
-					0.5 );
-				labelPos.unproject(camera);
-				if(this.viewer.scene.cameraMode == CameraMode.PERSPECTIVE) {
-					let direction = labelPos.sub(camera.position).normalize();
-					labelPos = new THREE.Vector3().addVectors(
-						camera.position, direction.multiplyScalar(distance));
-
-				}
-				label.position.copy(labelPos);
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-				let scale = (70 / pr);
-				label.scale.set(scale, scale, scale);
-			}
+			// 	// 简化的做法：直接在世界坐标中计算偏移
+			// 	// 方向：从camera指向sphere
+			// 	let direction = sphereWorldPos.clone().sub(camera.position).normalize();
+				
+			// 	// 垂直方向（屏幕向上）
+			// 	let upDir = new THREE.Vector3(0, 0, 1);
+				
+			// 	// 根据相机距离自动计算偏移距离
+			// 	// 相机越近，偏移越小；相机越远，偏移越大
+			// 	let offsetDistance = -distance * 0.13;  // 距离的 15%
+				
+			// 	// label 位置 = sphere 位置 + 向上偏移
+			// 	let labelPos = sphereWorldPos.clone().add(upDir.multiplyScalar(offsetDistance));
+			// }
 
 			// height label
 			if (measure.showHeight) {
-				let label = measure.heightLabel;
+				// let label = measure.heightLabel;
 
 				{
-					let distance = label.position.distanceTo(camera.position);
-					let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-					let scale = (70 / pr);
-					label.scale.set(scale, scale, scale);
+					// let distance = label.position.distanceTo(camera.position);
+					// let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
+					// let scale = (70 / pr);
+					// label.scale.set(scale, scale, scale);
 				}
 
 				{ // height edge
@@ -365,12 +512,12 @@ export class MeasuringTool extends EventDispatcher{
 			}
 
 			{ // area label
-				let label = measure.areaLabel;
-				let distance = label.position.distanceTo(camera.position);
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
+				// let label = measure.areaLabel;
+				// let distance = label.position.distanceTo(camera.position);
+				// let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
 
-				let scale = (70 / pr);
-				label.scale.set(scale, scale, scale);
+				// let scale = (70 / pr);
+				// label.scale.set(scale, scale, scale);
 			}
 
 			{ // radius label
@@ -416,5 +563,62 @@ export class MeasuringTool extends EventDispatcher{
 
 	render(){
 		this.viewer.renderer.render(this.scene, this.viewer.scene.getActiveCamera());
+	}
+
+	createNewMeasure(oldMeasurement) {
+		switch(oldMeasurement.name){
+			case 'point':
+				this.startInsertion({
+					showDistances: false,
+					showAngles: false,
+					showCoordinates: true,
+					showArea: false,
+					closed: true,
+					maxMarkers: 1,
+					name: 'point',
+					position: oldMeasurement.points[oldMeasurement.points.length-1]?.position || null,
+				});
+				break;
+			case 'length':
+				this.startInsertion({
+					showDistances: true,
+					showArea: false,
+					closed: false,
+					name: 'length',
+					position: oldMeasurement.points[oldMeasurement.points.length-1]?.position || null,
+				});
+				break;
+			case 'height':
+				this.startInsertion({
+					showDistances: false,
+					showHeight: true,
+					showArea: false,
+					closed: false,
+					maxMarkers: 2,
+					name: 'height',
+					position: oldMeasurement.points[oldMeasurement.points.length-1]?.position || null,
+				});
+				break;
+			case 'angle':
+				this.startInsertion({
+					showDistances: false,
+					showAngles: true,
+					showArea: false,
+					closed: true,
+					maxMarkers: 3,
+					name: 'angle',
+					position: oldMeasurement.points[oldMeasurement.points.length-1]?.position || null,
+				});
+				break;
+			case 'area':
+				this.startInsertion({
+					showDistances: false,
+					showArea: true,
+					closed: true,
+					name: 'area',
+					position: oldMeasurement.points[oldMeasurement.points.length-1]?.position || null,
+				});
+				break;
+		}
 	}
 };

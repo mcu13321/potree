@@ -38,6 +38,9 @@ export class InputHandler extends EventDispatcher {
 
 		this.logMessages = false;
 
+		this.isMeasurementEdit = false;
+		this.measurementReadonly = false;
+
 		if (this.domElement.tabIndex === -1) {
 			this.domElement.tabIndex = 2222;
 		}
@@ -48,7 +51,7 @@ export class InputHandler extends EventDispatcher {
 		this.domElement.addEventListener('mouseup', this.onMouseUp.bind(this), false);
 		this.domElement.addEventListener('mousemove', this.onMouseMove.bind(this), false);
 		this.domElement.addEventListener('mousewheel', this.onMouseWheel.bind(this), false);
-    this.domElement.addEventListener('wheel', this.onMouseWheel.bind(this), false);
+    	this.domElement.addEventListener('wheel', this.onMouseWheel.bind(this), false);
 		this.domElement.addEventListener('DOMMouseScroll', this.onMouseWheel.bind(this), false); // Firefox
 		this.domElement.addEventListener('dblclick', this.onDoubleClick.bind(this));
 		this.domElement.addEventListener('keydown', this.onKeyDown.bind(this));
@@ -60,6 +63,10 @@ export class InputHandler extends EventDispatcher {
 
 	addInputListener (listener) {
 		this.inputListeners.push(listener);
+	}
+
+	setMeasurementReadonlyStatus(readonly){
+		this.measurementReadonly = readonly;
 	}
 
 	removeInputListener (listener) {
@@ -76,6 +83,7 @@ export class InputHandler extends EventDispatcher {
 	}
 
 	onTouchStart (e) {
+		// debugger
 		if (this.logMessages) console.log(this.constructor.name + ': onTouchStart');
 
 		e.preventDefault();
@@ -86,7 +94,9 @@ export class InputHandler extends EventDispatcher {
 			let y = e.touches[0].pageY - rect.top;
 			this.mouse.set(x, y);
 
-			this.startDragging(null);
+			// this.startDragging(null);
+		} else {
+			this.drag = null;
 		}
 
 		
@@ -97,10 +107,39 @@ export class InputHandler extends EventDispatcher {
 				changedTouches: e.changedTouches
 			});
 		}
+
+				
+		if (!this.drag) {
+			this.hoveredElements = this.getHoveredElements(true);
+			let target = this.hoveredElements
+				.find(el => (
+					el.object._listeners &&
+					el.object._listeners['drag'] &&
+					el.object._listeners['drag'].length > 0));
+			
+			if (target && target.object && !this.measurementReadonly ) {
+				this.isMeasurementEdit = true;
+				this.startDragging(target.object, {location: target.point});
+				target.object.dispatchEvent({type: 'active'})
+				this.viewer.controls.enabled = false;
+			} else {
+				this.startDragging(null);
+				this.drag = null
+			}
+		} else {
+			this.drag.start = this.mouse.clone()
+		}
 	}
 
 	onTouchEnd (e) {
 		if (this.logMessages) console.log(this.constructor.name + ': onTouchEnd');
+
+		if (this.isMeasurementEdit) {
+			this.isMeasurementEdit = false;
+			this.startDragging(null);
+			this.viewer.controls.enabled = true;
+			this.drag = null;
+		}
 
 		e.preventDefault();
 
@@ -112,7 +151,6 @@ export class InputHandler extends EventDispatcher {
 			});
 		}
 
-		this.drag = null;
 
 		for (let inputListener of this.getSortedListeners()) {
 			inputListener.dispatchEvent({
@@ -120,6 +158,19 @@ export class InputHandler extends EventDispatcher {
 				touches: e.touches,
 				changedTouches: e.changedTouches
 			});
+		}
+
+		if (this.drag && this.drag.object) {
+			this.drag.end = {x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY}
+			let noMovement = this.getNormalizedDrag().length() === 0;
+			if (noMovement) {
+				this.drag.object.dispatchEvent({
+					type: 'drop',
+					drag: this.drag,
+					viewer: this.viewer
+				});
+				this.drag = null;
+			}
 		}
 	}
 
@@ -134,23 +185,23 @@ export class InputHandler extends EventDispatcher {
 			let y = e.touches[0].pageY - rect.top;
 			this.mouse.set(x, y);
 
-			if (this.drag) {
-				this.drag.mouse = 1;
+			if (this.drag && this.isMeasurementEdit) {
 
-				this.drag.lastDrag.x = x - this.drag.end.x;
-				this.drag.lastDrag.y = y - this.drag.end.y;
+			this.drag.lastDrag.x = x - this.drag.end.x;
+			this.drag.lastDrag.y = y - this.drag.end.y;
 
-				this.drag.end.set(x, y);
+			this.drag.end.set(x, y);
 
-				if (this.logMessages) console.log(this.constructor.name + ': drag: ');
-				for (let inputListener of this.getSortedListeners()) {
-					inputListener.dispatchEvent({
-						type: 'drag',
-						drag: this.drag,
-						viewer: this.viewer
-					});
-				}
+			if (this.drag.object) {
+				if (this.logMessages) console.log(this.constructor.name + ': drag: ' + this.drag.object.name);
+				this.drag.object.dispatchEvent({
+					type: 'drag',
+					drag: this.drag,
+					viewer: this.viewer
+				});
 			}
+		}
+
 		}
 
 		for (let inputListener of this.getSortedListeners()) {
@@ -278,19 +329,25 @@ export class InputHandler extends EventDispatcher {
 				}
 			}
 		}
-
+		
 		if (!this.drag) {
 			let target = this.hoveredElements
 				.find(el => (
 					el.object._listeners &&
 					el.object._listeners['drag'] &&
 					el.object._listeners['drag'].length > 0));
-
-			if (target) {
+			
+			if (target && target.object && !this.measurementReadonly ) {
+				this.isMeasurementEdit = true;
 				this.startDragging(target.object, {location: target.point});
+				target.object.dispatchEvent({type: 'active'})
+				this.viewer.controls.enabled = false;
 			} else {
 				this.startDragging(null);
+				this.drag = null
 			}
+		} else {
+			this.drag.start = this.mouse.clone()
 		}
 
 		if (this.scene) {
@@ -300,11 +357,15 @@ export class InputHandler extends EventDispatcher {
 
 	onMouseUp (e) {
 		if (this.logMessages) console.log(this.constructor.name + ': onMouseUp');
-
+		if (this.isMeasurementEdit) {
+			this.isMeasurementEdit = false;
+			this.startDragging(null);
+			this.viewer.controls.enabled = true;
+			this.drag = null;
+		}
 		e.preventDefault();
 
 		let noMovement = this.getNormalizedDrag().length() === 0;
-
 		
 		let consumed = false;
 		let consume = () => { return consumed = true; };
@@ -337,12 +398,14 @@ export class InputHandler extends EventDispatcher {
 		if (this.drag) {
 			if (this.drag.object) {
 				if (this.logMessages) console.log(`${this.constructor.name}: drop ${this.drag.object.name}`);
-				this.drag.object.dispatchEvent({
-					type: 'drop',
-					drag: this.drag,
-					viewer: this.viewer
-
-				});
+				if (noMovement && e.button === THREE.MOUSE.LEFT) {
+					this.drag.object.dispatchEvent({
+						type: 'drop',
+						drag: this.drag,
+						viewer: this.viewer
+					});
+				}
+				
 			} else {
 				for (let inputListener of this.getSortedListeners()) {
 					inputListener.dispatchEvent({
@@ -363,8 +426,10 @@ export class InputHandler extends EventDispatcher {
 					consume: consume,
 				});
 			}
-
-			this.drag = null;
+			console.log('this.viewer.inputHandler.endDragging');
+			if (noMovement  && e.button === THREE.MOUSE.LEFT) {
+				this.drag = null;
+			}
 		}
 
 		if(!consumed){
@@ -523,7 +588,6 @@ export class InputHandler extends EventDispatcher {
 	}
 
 	startDragging (object, args = null) {
-
 		let name = object ? object.name : "no name";
 		if (this.logMessages) console.log(`${this.constructor.name}: startDragging: '${name}'`);
 
@@ -540,6 +604,11 @@ export class InputHandler extends EventDispatcher {
 				this.drag[key] = args[key];
 			}
 		}
+	}
+
+	endDragging () {
+		if (this.logMessages) console.log(`${this.constructor.name}: endDragging`);
+		this.drag = null;
 	}
 
 	getMousePointCloudIntersection (mouse) {
@@ -650,7 +719,7 @@ export class InputHandler extends EventDispatcher {
 		}
 	}
 
-	getHoveredElements () {
+	getHoveredElements (isTouchEvent = false) {
 		let scenes = this.interactiveScenes.concat(this.scene.scene);
 
 		let interactableListeners = ['mouseup', 'mousemove', 'mouseover', 'mouseleave', 'drag', 'drop', 'click', 'select', 'deselect'];
@@ -674,10 +743,9 @@ export class InputHandler extends EventDispatcher {
 		
 		let raycaster = new THREE.Raycaster();
 		raycaster.ray.set(ray.origin, ray.direction);
-		raycaster.params.Line.threshold = 0.2;
-
+		raycaster.params.Line.threshold = isTouchEvent ? 20 : 0.2;
+		raycaster.camera = camera;
 		let intersections = raycaster.intersectObjects(interactables.filter(o => o.visible), false);
-
 		return intersections;
 	}
 

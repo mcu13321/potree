@@ -1,7 +1,19 @@
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 export default [
 	{
 		input: 'src/Potree.js',
 		treeshake: false,
+		plugins: [
+			nodeResolve({
+				browser: true,
+				preferBuiltins: false
+			}),
+			commonjs({
+				include: 'libs/konva/**',
+				requireReturnsDefault: 'auto'
+			})
+		],
 		output: {
 			file: 'build/potree/potree.js',
 			format: 'umd',

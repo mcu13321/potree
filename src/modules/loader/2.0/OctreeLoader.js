@@ -416,7 +416,23 @@ export class OctreeLoader{
 
 		octree.projection = metadata.projection;
 		octree.boundingBox = boundingBox;
-		octree.tightBoundingBox = boundingBox.clone();
+		
+		let position = metadata.attributes.find(v => v.name == 'position')
+		if (position) {
+			let min2 = new THREE.Vector3(...position.min);
+			let max2 = new THREE.Vector3(...position.max);
+			let tightBoundingBox = new THREE.Box3(min2, max2);
+
+			let offset2 = min2.clone();
+			tightBoundingBox.min.sub(offset2);
+			tightBoundingBox.max.sub(offset2);
+
+			octree.tightBoundingBox = tightBoundingBox;
+		} else {
+			octree.tightBoundingBox = boundingBox.clone();
+		}
+		
+
 		octree.boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
 		octree.tightBoundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
 		octree.offset = offset;

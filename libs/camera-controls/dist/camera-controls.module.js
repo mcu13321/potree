@@ -1718,7 +1718,12 @@ class CameraControls extends EventDispatcher {
         const boundingSphere = isObject3D ?
             CameraControls.createBoundingSphere(sphereOrMesh, _sphere) :
             _sphere.copy(sphereOrMesh);
-        promises.push(this.moveTo(boundingSphere.center.x, boundingSphere.center.y, boundingSphere.center.z, enableTransition));
+        if (sphereOrMesh?.name == 'point' && sphereOrMesh.points?.length > 0) { 
+            //针对point标记位置计算错误的情况，直接使用point的位置
+            promises.push(this.moveTo(sphereOrMesh.points[0].position.x, sphereOrMesh.points[0].position.y, sphereOrMesh.points[0].position.z, enableTransition));
+        } else {
+            promises.push(this.moveTo(boundingSphere.center.x, boundingSphere.center.y, boundingSphere.center.z, enableTransition));
+        }
         if (isPerspectiveCamera(this._camera)) {
             const distanceToFit = this.getDistanceToFitSphere(boundingSphere.radius);
             promises.push(this.dollyTo(distanceToFit, enableTransition));

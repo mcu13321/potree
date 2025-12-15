@@ -6,141 +6,146 @@
 
 import * as THREE from "../libs/three.js/build/three.module.js";
 
+import { Rect } from '../libs/konva/lib/shapes/Rect.js';
+import { Text } from '../libs/konva/lib/shapes/Text.js';
+import { Layer } from '../libs/konva/lib/Layer.js';
+
+
 export class TextSprite extends THREE.Object3D{
 	
-	constructor(text){
+	constructor(text,_viewer){
 		super();
-
-		let texture = new THREE.Texture();
-		texture.minFilter = THREE.LinearFilter;
-		texture.magFilter = THREE.LinearFilter;
-		let spriteMaterial = new THREE.SpriteMaterial({
-			map: texture,
-			depthTest: false,
-			depthWrite: false});
-
-		this.texture = texture;
-
-		this.material = spriteMaterial;
-		//this.material = getRawMaterial(texture);
-		this.sprite = new THREE.Sprite(this.material);
-		this.add(this.sprite);
-
-		this.borderThickness = 4;
-		this.fontface = 'Arial';
-		this.fontsize = 28;
-		this.borderColor = { r: 0, g: 0, b: 0, a: 1.0 };
-		this.backgroundColor = { r: 255, g: 255, b: 255, a: 1.0 };
-		this.textColor = {r: 255, g: 255, b: 255, a: 1.0};
+		this.viewer = _viewer;
+		this.visible = false;
 		this.text = '';
-
+		this.sprite = this.getMeasureLabel({ text: '' });
+		this.add(this.sprite);
 		this.setText(text);
 	}
 
 	setText(text){
 		if (this.text !== text){
 			this.text = text;
-
 			this.update();
 		}
 	}
 
-	setTextColor(color){
-		this.textColor = color;
-
-		this.update();
+	setVisible(visible){
+		if (this.visible != visible) {
+			this.visible = visible;
+			this.update();
+		}
 	}
 
-	setBorderColor(color){
-		this.borderColor = color;
-
-		this.update();
+	update() {
+		if (this.visible) {
+			this.remove(this.sprite);
+			this.sprite = this.getMeasureLabel({ text: this.text });
+			this.add(this.sprite);
+		}
+		
 	}
 
-	setBackgroundColor(color){
-		this.backgroundColor = color;
+	getMeasureLabel({ text = '', offsetY = 80, orthoZoom = 100 }) {
+    	// 获取设备像素比（处理高 DPI 屏幕）
+		const dpr = window.devicePixelRatio || 1;
+		const isMobile = dpr > 1.5;
+		
+		// 增加字体大小以适应高 DPI
+		const fontSize = 20 * Math.sqrt(dpr);
+		const padding = 10 * Math.sqrt(dpr);
+		const cornerRadius = 4 * Math.sqrt(dpr);
+		const strokeWidth = 2 * Math.sqrt(dpr);
+		
+		const tempText = new Text({
+			x: 1 * dpr,
+			y: 2 * dpr,
+			text,
+			fontSize: fontSize,
+			fill: '#ffffff',
+			padding: padding,
+		})
+		
+		const tempTextBg = new Rect({
+			x: 1 * dpr,
+			y: 1 * dpr,
+			stroke: '#ffffff',
+			strokeWidth: strokeWidth,
+			fill: '#2e82ff',
+			width: tempText.width(),
+			height: tempText.height(),
+			cornerRadius: cornerRadius,
+		})
+		
+		const layer = new Layer({ listening: false })
+		
+		layer.add(tempTextBg)
+		layer.add(tempText)
+		if (offsetY > 0) {
+			const offsetSpace = new Rect({
+				x: 0,
+				y: tempTextBg.height(),
+				fill: 'transparent',
+				width: tempTextBg.width(),
+				height: isMobile ? offsetY * dpr * 0.5 : offsetY * dpr,
+			})
+			layer.add(offsetSpace)
+		}
 
-		this.update();
-	}
-
-	update(){
-		let canvas = document.createElement('canvas');
-		let context = canvas.getContext('2d');
-		context.font = 'Bold ' + this.fontsize + 'px ' + this.fontface;
-
-		// get size data (height depends only on font size)
-		let metrics = context.measureText(this.text);
-		let textWidth = metrics.width;
-		let margin = 5;
-		let spriteWidth = 2 * margin + textWidth + 2 * this.borderThickness;
-		let spriteHeight = this.fontsize * 1.4 + 2 * this.borderThickness;
-
-		context.canvas.width = spriteWidth;
-		context.canvas.height = spriteHeight;
-		context.font = 'Bold ' + this.fontsize + 'px ' + this.fontface;
-
-		// background color
-		context.fillStyle = 'rgba(' + this.backgroundColor.r + ',' + this.backgroundColor.g + ',' +
-			this.backgroundColor.b + ',' + this.backgroundColor.a + ')';
-		// border color
-		context.strokeStyle = 'rgba(' + this.borderColor.r + ',' + this.borderColor.g + ',' +
-			this.borderColor.b + ',' + this.borderColor.a + ')';
-
-		context.lineWidth = this.borderThickness;
-		this.roundRect(context, this.borderThickness / 2, this.borderThickness / 2,
-			textWidth + this.borderThickness + 2 * margin, this.fontsize * 1.4 + this.borderThickness, 6);
-
-		// text color
-		context.strokeStyle = 'rgba(0, 0, 0, 1.0)';
-		context.strokeText(this.text, this.borderThickness + margin, this.fontsize + this.borderThickness);
-
-		context.fillStyle = 'rgba(' + this.textColor.r + ',' + this.textColor.g + ',' +
-			this.textColor.b + ',' + this.textColor.a + ')';
-		context.fillText(this.text, this.borderThickness + margin, this.fontsize + this.borderThickness);
-
-		let texture = new THREE.Texture(canvas);
-		texture.minFilter = THREE.LinearFilter;
+		// 生成高清 canvas
+		const canvas = layer.toCanvas()
+		
+		// 确保 canvas 尺寸是 2 的幂次方（避免纹理缩放警告）
+		const nextPowerOf2 = (n) => Math.pow(2, Math.ceil(Math.log2(n)));
+		const size = Math.max(nextPowerOf2(canvas.width), nextPowerOf2(canvas.height));
+		
+		// 创建正确尺寸的高清 canvas
+		const resizedCanvas = document.createElement('canvas');
+		resizedCanvas.width = size;
+		resizedCanvas.height = size;
+		const ctx = resizedCanvas.getContext('2d');
+		const offsetX2 = (size - canvas.width) / 2;
+		const offsetY2 = (size - canvas.height) / 2;
+		ctx.drawImage(canvas, offsetX2, offsetY2);
+		
+		const texture = new THREE.CanvasTexture(resizedCanvas)
+		// 设置纹理过滤方式为线性插值，在高 DPI 下效果更清晰
 		texture.magFilter = THREE.LinearFilter;
+		texture.minFilter = THREE.LinearFilter;
 		texture.needsUpdate = true;
-		//this.material.needsUpdate = true;
-
-		// { // screen-space sprite
-		// 	let [screenWidth, screenHeight] = [1620, 937];
-
-		// 	let uniforms = this.sprite.material.uniforms;
-		// 	let aspect = spriteHeight / spriteWidth;
-		// 	let factor = 0.5;
-
-		// 	let w = spriteWidth / screenWidth;
-		// 	let h = spriteHeight / screenHeight;
-
-		// 	uniforms.uScale.value = [2 * w, 2 * h];
-		// 	//uniforms.uScale.value = [factor * 1, factor * aspect];
-		//	this.sprite.material.uniforms.map.value = texture;
-		// }
-
-		this.sprite.material.map = texture;
-		this.texture = texture;
-
-		this.sprite.scale.set(spriteWidth * 0.01, spriteHeight * 0.01, 1.0);
+		
+		const material = new THREE.SpriteMaterial({
+			map: texture,
+			depthTest: false,
+			depthWrite: false,
+			transparent: true,
+			opacity: 1,
+			sizeAttenuation: false,
+		})
+		
+		material.map.colorSpace = THREE.SRGBColorSpace
+		const mesh = new THREE.Sprite(material)
+		mesh.visible = this.visible;
+		
+		if (!this.viewer) {
+			return mesh
+		}
+		
+		const _camera = this.viewer.scene.getActiveCamera();
+		
+		// 缩放时考虑实际渲染尺寸
+		const scaleX = size / 1300;
+		const scaleY = size / 1300;
+		const scaleyOverlay = isMobile ? 1.5 : 1;
+		
+		if (_camera.isPerspectiveCamera) {
+			mesh.scale.set(scaleX / scaleyOverlay, scaleY / scaleyOverlay, 1)
+		} else {
+			mesh.scale.set(size / orthoZoom / scaleyOverlay, size / orthoZoom / scaleyOverlay, 1)
+		}
+		
+		return mesh
 	}
-
-	roundRect(ctx, x, y, w, h, r){
-		ctx.beginPath();
-		ctx.moveTo(x + r, y);
-		ctx.lineTo(x + w - r, y);
-		ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-		ctx.lineTo(x + w, y + h - r);
-		ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-		ctx.lineTo(x + r, y + h);
-		ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-		ctx.lineTo(x, y + r);
-		ctx.quadraticCurveTo(x, y, x + r, y);
-		ctx.closePath();
-		ctx.fill();
-		ctx.stroke();
-	}
-
 }
 
 
