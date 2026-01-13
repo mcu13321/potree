@@ -739,10 +739,27 @@ export class InputHandler extends EventDispatcher {
 		}
 		
 		let camera = this.scene.getActiveCamera();
-		let ray = Utils.mouseToRay(this.mouse, camera, this.domElement.clientWidth, this.domElement.clientHeight);
-		
+
+		// 修改射线生成逻辑以支持正交相机
 		let raycaster = new THREE.Raycaster();
-		raycaster.ray.set(ray.origin, ray.direction);
+		
+		if (camera instanceof THREE.OrthographicCamera) {
+			// 对于正交相机，使用setFromCamera方法
+			let mouse = new THREE.Vector2(
+				(this.mouse.x / this.domElement.clientWidth) * 2 - 1,
+				-(this.mouse.y / this.domElement.clientHeight) * 2 + 1
+			);
+			raycaster.setFromCamera(mouse, camera);
+		} else {
+			// 对于透视相机，使用原有的Utils.mouseToRay方法
+			let ray = Utils.mouseToRay(this.mouse, camera, this.domElement.clientWidth, this.domElement.clientHeight);
+			raycaster.ray.set(ray.origin, ray.direction);
+		}
+
+		// let ray = Utils.mouseToRay(this.mouse, camera, this.domElement.clientWidth, this.domElement.clientHeight);
+		
+		// let raycaster = new THREE.Raycaster();
+		// raycaster.ray.set(ray.origin, ray.direction);
 		raycaster.params.Line.threshold = isTouchEvent ? 20 : 0.2;
 		raycaster.camera = camera;
 		let intersections = raycaster.intersectObjects(interactables.filter(o => o.visible), false);

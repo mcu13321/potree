@@ -288,7 +288,7 @@ export class Scene extends EventDispatcher{
 	};
 
 	removeMeasurement (measurement) {
-		let index = this.measurements.indexOf(measurement);
+		const index = this.measurements.findIndex(m => m.uuid === measurement.uuid);
 		if (index > -1) {
 			this.measurements.splice(index, 1);
 			this.dispatchEvent({

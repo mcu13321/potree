@@ -356,12 +356,11 @@ export class Measure extends THREE.Object3D {
 		let sphere = new THREE.Sprite(this.MeasuringTool.activeMeasurement == this ? this.materialRed : this.materialBlue)
 		
 		const _camera = this.viewer.scene.getActiveCamera();
-		const orthoZoom = 100;
 		
 		if (_camera.isPerspectiveCamera) {
-			sphere.scale.set(20 / 1300, 20 / 1300, 1)
+			sphere.scale.set(20 / 1000, 20 / 1000, 1)
 		} else {
-			sphere.scale.set(20 / orthoZoom, 20 / orthoZoom, 1)
+			sphere.scale.set(20 / 1000 * _camera.zoom, 20 / 1000 * _camera.zoom, 1)
 		}
 		this.add(sphere);
 		this.spheres.push(sphere);

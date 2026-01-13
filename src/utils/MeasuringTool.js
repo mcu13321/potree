@@ -404,7 +404,21 @@ export class MeasuringTool extends EventDispatcher{
 
 			updateAzimuth(this.viewer, measure);
 
-			// spheres
+			//spheres
+			if (camera.isPerspectiveCamera) {
+				for(let sphere of measure.spheres){
+					sphere.scale.set(20 / 1000, 20 / 1000, 1)
+				}
+			} else {
+				const dpr = window.devicePixelRatio || 1;
+				const isMobile = dpr > 1.5;
+				const scaleyOverlay = isMobile ? 4.5 : 1;
+				for(let sphere of measure.spheres){
+					sphere.scale.set(20 / camera.zoom / 170 * scaleyOverlay, 20 / camera.zoom / 170 * scaleyOverlay, 1)
+				}
+			}
+
+			//spheres
 			// for(let sphere of measure.spheres){
 			// 	let distance = camera.position.distanceTo(sphere.getWorldPosition(new THREE.Vector3()));
 			// 	let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
@@ -556,6 +570,29 @@ export class MeasuringTool extends EventDispatcher{
 
 				for(const label of labels){
 					label.visible = false;
+				}
+			} else {
+				const labels = [
+					...measure.sphereLabels, 
+					...measure.edgeLabels, 
+					...measure.angleLabels, 
+					...measure.coordinateLabels,
+					measure.heightLabel,
+					measure.areaLabel,
+					measure.circleRadiusLabel,
+				];
+				const dpr = window.devicePixelRatio || 1;
+				const isMobile = dpr > 1.5;
+				if (camera.isPerspectiveCamera) {
+					const scaleyOverlay = isMobile ? 1.5 : 1;
+					for(let label of labels){
+						label.sprite.scale.set(label.userData.scaleX / scaleyOverlay, label.userData.scaleY / scaleyOverlay, 1)
+					}
+				} else {
+					const scaleyOverlay = isMobile ? 18 : 6;
+					for(let label of labels){
+						label.sprite.scale.set(label.userData.scaleX * scaleyOverlay / camera.zoom, label.userData.scaleY * scaleyOverlay / camera.zoom, 1)
+					}
 				}
 			}
 		}

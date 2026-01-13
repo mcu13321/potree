@@ -961,8 +961,14 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setTopView4CameraControls(){
-		this.cameraControls.fitToBox(this.getBoundingBox(this.scene.pointclouds), true);
-		this.cameraControls.rotatePolarTo(-Math.PI / 2, true);
+		let box = this.getBoundingBox(this.scene.pointclouds);
+		if (this.cameraControls.camera.isPerspectiveCamera) {
+			this.cameraControls.camera.zoom = 1;
+		} 
+		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
+		this.cameraControls.normalizeRotations().reset(true)
+		this.cameraControls.fitToBox(box, true);
+		this.cameraControls.rotateTo(0, 0, true);
 	};
 	
 	setBottomView(){

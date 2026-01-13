@@ -131,18 +131,13 @@ export class TextSprite extends THREE.Object3D{
 			return mesh
 		}
 		
-		const _camera = this.viewer.scene.getActiveCamera();
 		
 		// 缩放时考虑实际渲染尺寸
-		const scaleX = size / 1300;
-		const scaleY = size / 1300;
-		const scaleyOverlay = isMobile ? 1.5 : 1;
+		const scaleX = size / 1000;
+		const scaleY = size / 1000;
+		this.userData.scaleX = scaleX;
+		this.userData.scaleY = scaleY;
 		
-		if (_camera.isPerspectiveCamera) {
-			mesh.scale.set(scaleX / scaleyOverlay, scaleY / scaleyOverlay, 1)
-		} else {
-			mesh.scale.set(size / orthoZoom / scaleyOverlay, size / orthoZoom / scaleyOverlay, 1)
-		}
 		
 		return mesh
 	}

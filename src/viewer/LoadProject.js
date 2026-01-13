@@ -86,7 +86,12 @@ export function loadMeasurement(viewer, data){
 
 	const duplicate = viewer.scene.measurements.find(measure => measure.uuid === data.uuid);
 	if(duplicate){
-		return;
+		if (duplicate.points.length == data.points.length) {
+			for(let i = 0; i < duplicate.points.length; i++){
+				duplicate.points[i].position = new THREE.Vector3(...data.points[i]);
+			}
+		}
+		return
 	}
 
 	const measure = new Measure(viewer);
@@ -114,7 +119,7 @@ export function loadMeasurement(viewer, data){
 	}
 
 	viewer.scene.addMeasurement(measure);
-	viewer.scene.addMeasurement2platform(measure);
+	// viewer.scene.addMeasurement2platform(measure);
 	return measure;
 }
 
