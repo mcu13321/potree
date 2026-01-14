@@ -387,7 +387,6 @@ export class MeasuringTool extends EventDispatcher{
 	
 	update(){
 		let camera = this.viewer.scene.getActiveCamera();
-		let domElement = this.renderer.domElement;
 		let measurements = this.viewer.scene.measurements;
 
 		const renderAreaSize = this.renderer.getSize(new THREE.Vector2());
@@ -410,11 +409,9 @@ export class MeasuringTool extends EventDispatcher{
 					sphere.scale.set(20 / 1000, 20 / 1000, 1)
 				}
 			} else {
-				const dpr = window.devicePixelRatio || 1;
-				const isMobile = dpr > 1.5;
-				const scaleyOverlay = isMobile ? 4.5 : 1;
+				const currentWorldHeight = (camera.top - camera.bottom) / camera.zoom;
 				for(let sphere of measure.spheres){
-					sphere.scale.set(20 / camera.zoom / 170 * scaleyOverlay, 20 / camera.zoom / 170 * scaleyOverlay, 1)
+					sphere.scale.set(currentWorldHeight / 75, currentWorldHeight / 75, 1);
 				}
 			}
 
@@ -589,9 +586,10 @@ export class MeasuringTool extends EventDispatcher{
 						label.sprite.scale.set(label.userData.scaleX / scaleyOverlay, label.userData.scaleY / scaleyOverlay, 1)
 					}
 				} else {
-					const scaleyOverlay = isMobile ? 18 : 6;
+					const scaleyOverlay = isMobile ? 0.45 : 0.75;
+					const trueZoom = (camera.top - camera.bottom) / camera.zoom * scaleyOverlay;
 					for(let label of labels){
-						label.sprite.scale.set(label.userData.scaleX * scaleyOverlay / camera.zoom, label.userData.scaleY * scaleyOverlay / camera.zoom, 1)
+						label.sprite.scale.set(label.userData.scaleX * trueZoom, label.userData.scaleY * trueZoom, 1);
 					}
 				}
 			}
