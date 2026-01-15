@@ -49,6 +49,8 @@ export class Scene extends EventDispatcher{
 		this.directionalLight = null;
 
 		this.initialize();
+		// const axesHelper = new THREE.AxesHelper( 50 );
+		// this.scene.add( axesHelper );
 	}
 
 	estimateHeightAt (position) {
@@ -124,6 +126,10 @@ export class Scene extends EventDispatcher{
 	addPointCloud (pointcloud) {
 		this.pointclouds.push(pointcloud);
 		this.scenePointCloud.add(pointcloud);
+		const size = this.getBoundingBox().getSize();
+		pointcloud.position.x = - size.x / 2
+		pointcloud.position.y = - size.y / 2
+		pointcloud.position.z = 0
 
 		this.dispatchEvent({
 			type: 'pointcloud_added',
