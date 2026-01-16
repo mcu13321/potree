@@ -970,6 +970,15 @@ export class Viewer extends EventDispatcher{
 		this.cameraControls.fitToBox(box, true);
 		this.cameraControls.rotateTo(0, 0, true);
 	};
+
+	setFromR3fCameraControls(){
+		const r3fCameraControlsTarget = window.parent.r3fCameraControls.getTarget();
+		const r3fCameraControlsSpherical = window.parent.r3fCameraControls.getSpherical();
+		
+		this.cameraControls.moveTo(r3fCameraControlsTarget.x, r3fCameraControlsTarget.y, r3fCameraControlsTarget.z, true);
+		this.cameraControls.rotateTo(r3fCameraControlsSpherical.theta, r3fCameraControlsSpherical.phi, true);
+        this.cameraControls.dollyTo(r3fCameraControlsSpherical.radius, true);
+	}
 	
 	setBottomView(){
 		this.scene.view.yaw = -Math.PI;
