@@ -394,7 +394,8 @@ export class MeasuringTool extends EventDispatcher{
 		let clientHeight = renderAreaSize.height;
 
 		this.light.position.copy(camera.position);
-
+		const dpr = window.devicePixelRatio || 1;
+		const isMobile = dpr > 1.5;
 		// make size independant of distance
 		for (let measure of measurements) {
 			measure.lengthUnit = this.viewer.lengthUnit;
@@ -402,16 +403,18 @@ export class MeasuringTool extends EventDispatcher{
 			measure.update();
 
 			updateAzimuth(this.viewer, measure);
-
+			//TODO 移动端横屏与竖屏测量标记显示大小不一致，尚未找到原因，下方根据横屏或竖屏设置不同scaley为权宜之计
 			//spheres
 			if (camera.isPerspectiveCamera) {
+				const scaleyOverlay = isMobile ?  window.innerHeight > window.innerWidth ? 1.3 : 2.6 : 1;
 				for(let sphere of measure.spheres){
-					sphere.scale.set(20 / 1000, 20 / 1000, 1)
+					sphere.scale.set(20 / 1000 * scaleyOverlay, 20 / 1000 * scaleyOverlay, 1)
 				}
 			} else {
+				const scaleyOverlay = isMobile ?  window.innerHeight > window.innerWidth ? 1.3 : 2.6 : 1;
 				const currentWorldHeight = (camera.top - camera.bottom) / camera.zoom;
 				for(let sphere of measure.spheres){
-					sphere.scale.set(currentWorldHeight / 75, currentWorldHeight / 75, 1);
+					sphere.scale.set(currentWorldHeight / 75 * scaleyOverlay, currentWorldHeight / 75 * scaleyOverlay, 1);
 				}
 			}
 
@@ -578,15 +581,14 @@ export class MeasuringTool extends EventDispatcher{
 					measure.areaLabel,
 					measure.circleRadiusLabel,
 				];
-				const dpr = window.devicePixelRatio || 1;
-				const isMobile = dpr > 1.5;
 				if (camera.isPerspectiveCamera) {
-					const scaleyOverlay = isMobile ? 1.5 : 1;
+					//TODO 移动端横屏与竖屏测量标记显示大小不一致，尚未找到原因，下方根据横屏或竖屏设置不同scaley为权宜之计
+					const scaleyOverlay = isMobile ?  window.innerHeight > window.innerWidth ? 0.8 : 1.8 : 1;
 					for(let label of labels){
-						label.sprite.scale.set(label.userData.scaleX / scaleyOverlay, label.userData.scaleY / scaleyOverlay, 1)
+						label.sprite.scale.set(label.userData.scaleX * scaleyOverlay, label.userData.scaleY * scaleyOverlay, 1)
 					}
 				} else {
-					const scaleyOverlay = isMobile ? 0.45 : 0.75;
+					const scaleyOverlay = isMobile ? window.innerHeight > window.innerWidth ? 0.55 : 1.2: 0.75;
 					const trueZoom = (camera.top - camera.bottom) / camera.zoom * scaleyOverlay;
 					for(let label of labels){
 						label.sprite.scale.set(label.userData.scaleX * trueZoom, label.userData.scaleY * trueZoom, 1);
