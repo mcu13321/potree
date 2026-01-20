@@ -249,6 +249,7 @@ class EventDispatcher {
 var _a;
 const VERSION = '3.1.0'; // will be replaced with `version` in package.json during the build process.
 const TOUCH_DOLLY_FACTOR = 1 / 8;
+const TOUCH_ZOOM_FACTOR = 8 / 8;
 const isMac = /Mac/.test((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.navigator) === null || _a === void 0 ? void 0 : _a.platform);
 let THREE;
 let _ORIGIN;
@@ -671,7 +672,7 @@ class CameraControls extends EventDispatcher {
         };
         this.touches = {
             one: ACTION.TOUCH_ROTATE,
-            two: isPerspectiveCamera(this._camera) ? ACTION.TOUCH_DOLLY_TRUCK :
+            two: () => isPerspectiveCamera(this._camera) ? ACTION.TOUCH_DOLLY_TRUCK :
                 isOrthographicCamera(this._camera) ? ACTION.TOUCH_ZOOM_TRUCK :
                     ACTION.NONE,
             three: ACTION.TOUCH_TRUCK,
@@ -745,7 +746,7 @@ class CameraControls extends EventDispatcher {
                         this._state = this.touches.one;
                         break;
                     case 2:
-                        this._state = this.touches.two;
+                        this._state = this.touches.two();
                         break;
                     case 3:
                         this._state = this.touches.three;
@@ -780,7 +781,7 @@ class CameraControls extends EventDispatcher {
                         this._state = this.touches.one;
                         break;
                     case 2:
-                        this._state = this.touches.two;
+                        this._state = this.touches.two();
                         break;
                     case 3:
                         this._state = this.touches.three;
@@ -909,7 +910,7 @@ class CameraControls extends EventDispatcher {
                         this._state = this.touches.one;
                         break;
                     case 2:
-                        this._state = this.touches.two;
+                        this._state = this.touches.two();
                         break;
                     case 3:
                         this._state = this.touches.three;
@@ -1011,7 +1012,7 @@ class CameraControls extends EventDispatcher {
                     this._isUserControllingDolly = true;
                 }
                 else {
-                    this._zoomInternal(dollyDirection * deltaY * TOUCH_DOLLY_FACTOR, dollyX, dollyY);
+                    this._zoomInternal(dollyDirection * deltaY * TOUCH_ZOOM_FACTOR, dollyX, dollyY);
                     this._isUserControllingZoom = true;
                 }
             }
@@ -1042,7 +1043,7 @@ class CameraControls extends EventDispatcher {
                     this._isUserControllingDolly = true;
                 }
                 else {
-                    this._zoomInternal(dollyDelta * TOUCH_DOLLY_FACTOR, dollyX, dollyY);
+                    this._zoomInternal(dollyDelta * TOUCH_ZOOM_FACTOR, dollyX, dollyY);
                     this._isUserControllingZoom = true;
                 }
             }
