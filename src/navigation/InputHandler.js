@@ -95,8 +95,6 @@ export class InputHandler extends EventDispatcher {
 			this.mouse.set(x, y);
 
 			// this.startDragging(null);
-		} else {
-			this.drag = null;
 		}
 
 		
