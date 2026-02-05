@@ -51,6 +51,7 @@ export class Sidebar{
 		this.initToolbar();
 		this.initScene();
 		this.initNavigation();
+		this.initScreenshot();
 		this.initFilters();
 		this.initClippingTool();
 		this.initSettings();
@@ -1365,6 +1366,42 @@ export class Sidebar{
 			this.viewer.setEDLEnabled($('#chkEDLEnabled').prop("checked"));
 		});
 	}
+
+	initScreenshot() {
+      	let elScreenshot = $('#screenshot_image');
+		let sldScreenSpeed = $('#sldScreenshoot');
+		let ivScreenSpeeds = $('#ivScreentshot');// lblMoveSpeed
+      	let ivScreenSpeed = ivScreenSpeeds[0];
+
+		sldScreenSpeed.slider({
+			value: 3.00,
+			min: 0.5,
+			max: 99,
+			step: 0.01,
+			slide: (event, ui) => { ivScreenSpeed.value = ui.value; }
+		});
+
+		ivScreenSpeed.addEventListener('change', e => {
+			const value = parseFloat(e.target.value);
+			if (value > 99) {
+			ivScreenSpeed.value = 99;
+			} else if (value < 0.5) {
+			ivScreenSpeed.value = 0.5;
+			}
+			sldScreenSpeed.slider("value", value);
+		})
+
+      	ivScreenSpeed.value = 3.00;
+
+		let elCameraProjection = $(`
+			<selectgroup id="screenshot_options">
+				<option id="screenshot_partial" value="Partial">Partial Screenshot</option>
+          		<option id="screenshot_full" value="Full">Full Screenshot</option>
+			</selectgroup>
+		`);
+		elScreenshot.append(elCameraProjection);
+		elCameraProjection.selectgroup();
+    }
 
 	initNavigation(){
 		let elNavigation = $('#navigation');

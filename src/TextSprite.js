@@ -21,6 +21,19 @@ export class TextSprite extends THREE.Object3D{
 		this.sprite = this.getMeasureLabel({ text: '' });
 		this.add(this.sprite);
 		this.setText(text);
+
+		this.borderColor = { r: 0, g: 0, b: 0, a: 1.0 };
+		this.backgroundColor = { r: 255, g: 255, b: 255, a: 1.0 };
+		let texture = new THREE.Texture();
+		texture.minFilter = THREE.LinearFilter;
+		texture.magFilter = THREE.LinearFilter;
+		this.texture = texture;
+		let spriteMaterial = new THREE.SpriteMaterial({
+			map: texture,
+			depthTest: false,
+			depthWrite: false
+		});
+		this.material = spriteMaterial;
 	}
 
 	setText(text){
@@ -35,6 +48,16 @@ export class TextSprite extends THREE.Object3D{
 			this.visible = visible;
 			this.update();
 		}
+	}
+
+	setBorderColor(color){
+		this.borderColor = color;
+		this.update();
+	}
+
+	setBackgroundColor(color){
+		this.backgroundColor = color;
+		this.update();
 	}
 
 	update() {

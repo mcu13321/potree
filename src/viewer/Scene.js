@@ -123,13 +123,16 @@ export class Scene extends EventDispatcher{
 		return box;
 	}
 
-	addPointCloud (pointcloud) {
+	addPointCloud (pointcloud, translateToCenter = true) {
 		this.pointclouds.push(pointcloud);
 		this.scenePointCloud.add(pointcloud);
-		const size = this.getBoundingBox().getSize();
-		pointcloud.position.x = - size.x / 2
-		pointcloud.position.y = - size.y / 2
-		pointcloud.position.z = 0
+		
+		if (translateToCenter) {
+			const size = this.getBoundingBox().getSize();
+			pointcloud.position.x = - size.x / 2
+			pointcloud.position.y = - size.y / 2
+			pointcloud.position.z = 0
+		}
 
 		this.dispatchEvent({
 			type: 'pointcloud_added',

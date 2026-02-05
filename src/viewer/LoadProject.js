@@ -123,7 +123,7 @@ export function loadMeasurement(viewer, data){
 	return measure;
 }
 
-function loadVolume(viewer, data){
+export function loadVolume(viewer, data){
 
 	const duplicate = viewer.scene.volumes.find(volume => volume.uuid === data.uuid);
 	if(duplicate){

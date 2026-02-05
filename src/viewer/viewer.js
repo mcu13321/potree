@@ -1262,7 +1262,7 @@ export class Viewer extends EventDispatcher{
 			sidebarContainer.css('height', '100%');
 
 			let imgMenuToggle = document.createElement('img');
-			imgMenuToggle.src = new URL(Potree.resourcePath + '/icons/menu_button.svg').href;
+			imgMenuToggle.src = new URL(Potree.resourcePath + '/icons/menu_button.png').href;
 			imgMenuToggle.onclick = this.toggleSidebar;
 			imgMenuToggle.classList.add('potree_menu_toggle');
 
@@ -1890,10 +1890,8 @@ export class Viewer extends EventDispatcher{
 			for(let profile of this.scene.profiles){
 				boxes.push(...profile.boxes);
 			}
-			
 			// Needed for .getInverse(), pre-empt a determinant of 0, see #815 / #816
 			let degenerate = (box) => box.matrixWorld.determinant() !== 0;
-			
 			let clipBoxes = boxes.filter(degenerate).map( box => {
 				box.updateMatrixWorld();
 				
