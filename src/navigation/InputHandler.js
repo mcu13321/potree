@@ -40,6 +40,7 @@ export class InputHandler extends EventDispatcher {
 
 		this.isMeasurementEdit = false;
 		this.measurementReadonly = false;
+		this.hoveredPoint = null;
 
 		if (this.domElement.tabIndex === -1) {
 			this.domElement.tabIndex = 2222;
@@ -83,7 +84,6 @@ export class InputHandler extends EventDispatcher {
 	}
 
 	onTouchStart (e) {
-		// debugger
 		if (this.logMessages) console.log(this.constructor.name + ': onTouchStart');
 
 		e.preventDefault();
@@ -106,7 +106,8 @@ export class InputHandler extends EventDispatcher {
 			});
 		}
 
-				
+		this.hoveredPoint = this.getMousePointCloudIntersection(this.mouse);
+			
 		if (!this.drag) {
 			this.hoveredElements = this.getHoveredElements(true);
 			let target = this.hoveredElements
@@ -149,7 +150,6 @@ export class InputHandler extends EventDispatcher {
 			});
 		}
 
-
 		for (let inputListener of this.getSortedListeners()) {
 			inputListener.dispatchEvent({
 				type: e.type,
@@ -158,7 +158,7 @@ export class InputHandler extends EventDispatcher {
 			});
 		}
 
-		if (this.drag && this.drag.object) {
+		if (this.drag && this.drag.object && this.hoveredPoint) {
 			this.drag.end = {x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY}
 			let noMovement = this.getNormalizedDrag().length() === 0;
 			if (noMovement) {
@@ -327,7 +327,9 @@ export class InputHandler extends EventDispatcher {
 				}
 			}
 		}
-		
+		this.hoveredElements = this.getHoveredElements();
+		this.hoveredPoint = this.getMousePointCloudIntersection(this.mouse);
+
 		if (!this.drag) {
 			let target = this.hoveredElements
 				.find(el => (
@@ -392,8 +394,8 @@ export class InputHandler extends EventDispatcher {
 				});
 			}
 		}
-
-		if (this.drag) {
+		
+		if (this.drag && this.hoveredPoint) {
 			if (this.drag.object) {
 				if (this.logMessages) console.log(`${this.constructor.name}: drop ${this.drag.object.name}`);
 				if (noMovement && e.button === THREE.MOUSE.LEFT) {

@@ -273,8 +273,9 @@ export class MeasuringTool extends EventDispatcher{
 					Math.pow(e.clientY - this.mouseDownPosition.y, 2)
 				);
 				const hasMoved = distance > 1;
-
-				if ((e.button === THREE.MOUSE.LEFT || e.type === 'touchend') && !hasMoved) {
+				let hoveredPoint = this.viewer.inputHandler.hoveredPoint;
+				
+				if ((e.button === THREE.MOUSE.LEFT || e.type === 'touchend') && !hasMoved && hoveredPoint) {
 
 					if (this.eventMeasurement.points.length >= this.eventMeasurement.maxMarkers) {
 						cancel.callback();
