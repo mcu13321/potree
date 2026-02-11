@@ -652,9 +652,17 @@ export class Measure extends THREE.Object3D {
 				let coordinateLabel = this.coordinateLabels[0];
 
 				if (!!coordinateLabel) {
-					let msg = position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");
-					coordinateLabel.setText(msg);
-					coordinateLabel.position.copy(position);
+					const offset = this.viewer.scene?.pointclouds[0]?.userData?.offset;
+					if(!!offset){
+						const _position = position.clone().subVectors(position.clone(), offset);
+						let msg = _position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");
+						coordinateLabel.setText(msg);
+						coordinateLabel.position.copy(position);
+					} else {
+						let msg = position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");
+						coordinateLabel.setText(msg);
+						coordinateLabel.position.copy(position);
+					}
 				}
 			}
 

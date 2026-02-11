@@ -960,15 +960,15 @@ export class Viewer extends EventDispatcher{
 		this.fitToScreen();
 	};
 
-	setTopView4CameraControls(){
+	setTopView4CameraControls(animation = true){
 		let box = this.getBoundingBox(this.scene.pointclouds);
 		if (this.cameraControls.camera.isPerspectiveCamera) {
 			this.cameraControls.camera.zoom = 1;
 		} 
 		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
-		this.cameraControls.normalizeRotations().reset(true)
-		this.cameraControls.fitToBox(box, true);
-		this.cameraControls.rotateTo(0, 0, true);
+		this.cameraControls.normalizeRotations().reset(animation)
+		this.cameraControls.fitToBox(box, animation);
+		this.cameraControls.rotateTo(0, 0, animation);
 	};
 
 	setFromR3fCameraControls(){

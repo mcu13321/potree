@@ -112,9 +112,8 @@ export class Scene extends EventDispatcher{
 		this.scenePointCloud.updateMatrixWorld(true);
 		this.referenceFrame.updateMatrixWorld(true);
 
-		for (let pointcloud of pointclouds) {
+		for (let pointcloud of pointclouds.filter(pc => pc.visible)) {
 			pointcloud.updateMatrixWorld(true);
-
 			let pointcloudBox = pointcloud.pcoGeometry.tightBoundingBox ? pointcloud.pcoGeometry.tightBoundingBox : pointcloud.boundingBox;
 			let boxWorld = Utils.computeTransformedBoundingBox(pointcloudBox, pointcloud.matrixWorld);
 			box.union(boxWorld);
@@ -128,10 +127,17 @@ export class Scene extends EventDispatcher{
 		this.scenePointCloud.add(pointcloud);
 		
 		if (translateToCenter) {
+			const oldPosition = pointcloud.position.clone();
 			const size = this.getBoundingBox().getSize();
 			pointcloud.position.x = - size.x / 2
 			pointcloud.position.y = - size.y / 2
 			pointcloud.position.z = 0
+
+			if (!pointcloud.userData) {
+				pointcloud.userData = {};
+			}
+			const newPosition = pointcloud.position.clone();
+			pointcloud.userData.offset = newPosition.subVectors(newPosition,oldPosition);
 		}
 
 		this.dispatchEvent({
