@@ -30,7 +30,7 @@ function createHeightLine(){
 }
 
 function createHeightLabel(viewer){
-	const heightLabel = new TextSprite('', viewer);
+	const heightLabel = new TextSprite('', viewer, 120, 10);
 	heightLabel.visible = false;
 	return heightLabel;
 }

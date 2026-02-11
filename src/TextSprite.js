@@ -13,8 +13,11 @@ import { Layer } from '../libs/konva/lib/Layer.js';
 
 export class TextSprite extends THREE.Object3D{
 	
-	constructor(text,_viewer){
+	constructor(text,_viewer,offsetX = 0,offsetY = 80){
 		super();
+
+		this.offsetX = offsetX;
+		this.offsetY = offsetY;
 		this.viewer = _viewer;
 		this.visible = false;
 		this.text = '';
@@ -69,7 +72,7 @@ export class TextSprite extends THREE.Object3D{
 		
 	}
 
-	getMeasureLabel({ text = '', offsetY = 80, orthoZoom = 100 }) {
+	getMeasureLabel({ text = ''}) {
     	// 获取设备像素比（处理高 DPI 屏幕）
 		const dpr = window.devicePixelRatio || 1;
 		const isMobile = dpr > 1.5;
@@ -81,7 +84,7 @@ export class TextSprite extends THREE.Object3D{
 		const strokeWidth = 2 * Math.sqrt(dpr);
 		
 		const tempText = new Text({
-			x: 1 * dpr,
+			x: (1 + this.offsetX) * dpr,
 			y: 2 * dpr,
 			text,
 			fontSize: fontSize,
@@ -90,7 +93,7 @@ export class TextSprite extends THREE.Object3D{
 		})
 		
 		const tempTextBg = new Rect({
-			x: 1 * dpr,
+			x: (1 + this.offsetX) * dpr,
 			y: 1 * dpr,
 			stroke: '#ffffff',
 			strokeWidth: strokeWidth,
@@ -104,13 +107,13 @@ export class TextSprite extends THREE.Object3D{
 		
 		layer.add(tempTextBg)
 		layer.add(tempText)
-		if (offsetY > 0) {
+		if (this.offsetY > 0) {
 			const offsetSpace = new Rect({
 				x: 0,
 				y: tempTextBg.height(),
 				fill: 'transparent',
 				width: tempTextBg.width(),
-				height: isMobile ? offsetY * dpr * 0.5 : offsetY * dpr,
+				height: isMobile ? this.offsetY * dpr * 0.5 : this.offsetY * dpr,
 			})
 			layer.add(offsetSpace)
 		}
