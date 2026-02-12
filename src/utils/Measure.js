@@ -562,17 +562,22 @@ export class Measure extends THREE.Object3D {
 	};
 
 	getArea () {
-		let area = 0;
-		let j = this.points.length - 1;
-
-		for (let i = 0; i < this.points.length; i++) {
+		let n = this.points.length;
+		if (n < 3) return 0;
+		
+		let nx = 0, ny = 0, nz = 0;
+		for (let i = 0; i < n; i++) {
 			let p1 = this.points[i].position;
-			let p2 = this.points[j].position;
-			area += (p2.x + p1.x) * (p1.y - p2.y);
-			j = i;
+			let p2 = this.points[(i + 1) % n].position; // 闭合回路
+			
+			// 分别计算在 YZ, ZX, XY 平面上的投影贡献
+			nx += (p1.y - p2.y) * (p1.z + p2.z);
+			ny += (p1.z - p2.z) * (p1.x + p2.x);
+			nz += (p1.x - p2.x) * (p1.y + p2.y);
 		}
-
-		return Math.abs(area / 2);
+		
+		// 合成向量模长的一半即为面积
+		return 0.5 * Math.sqrt(nx * nx + ny * ny + nz * nz);
 	};
 
 	getTotalDistance () {
