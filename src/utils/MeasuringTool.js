@@ -356,11 +356,16 @@ export class MeasuringTool extends EventDispatcher{
 				this.viewer.scene.removeMeasurement(e.measurement);
 				this.update();
 			}
-			setTimeout(() => {
-				if (this.measurementTypeName == copyMeasurement.name) {
-					this.createNewMeasure(copyMeasurement)
-				}
-			})
+			if (e.measurement.name == 'tag') {
+				this.viewer.scene.removeMeasurement(e.measurement);		
+				this.stopInsertion('tag');
+			} else {
+				setTimeout(() => {
+					if (this.measurementTypeName == copyMeasurement.name) {
+						this.createNewMeasure(copyMeasurement)
+					}
+				})	
+			}
 		}
 
 		measure.addEventListener('measure_finished', measureFinished)
@@ -375,14 +380,21 @@ export class MeasuringTool extends EventDispatcher{
 		return measure;
 	}
 
-	stopInsertion(){
+	stopInsertion(type = 'measurement'){
 		this.measurementTypeName = null;
 		this.eventMeasurement = null;
 		this.viewer.inputHandler.endDragging();
 		this.viewer.scene.measurements.forEach(measurement => {
-			if (!measurement.finished) {
-				this.viewer.scene.removeMeasurement(measurement);
+			if (type == 'measurement') {
+				if (!measurement.finished && measurement.name != 'tag') {
+					this.viewer.scene.removeMeasurement(measurement);
+				}
+			} else if (type == 'tag') {
+				if (measurement.name == 'tag') {
+					this.viewer.scene.removeMeasurement(measurement);
+				}
 			}
+			
 		});
 	}
 	

@@ -471,7 +471,7 @@ export class Measure extends THREE.Object3D {
 						'measurement': this,
 						'index': i
 					});
-					if (this.name == 'point') {
+					if (this.name == 'point' || this.name == 'tag') {
 						this.coordinateLabels[0].setVisible(true);
 						this.dispatchEvent({
 							'type': 'measure_finished',

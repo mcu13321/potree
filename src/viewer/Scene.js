@@ -295,11 +295,18 @@ export class Scene extends EventDispatcher{
 	};
 
 	addMeasurement2platform(measurement){
-		this.dispatchEvent({
-			'type': 'measurement_added_to_platform',
-			'scene': this,
-			'measurement': measurement
-		});
+		if (measurement.name == 'tag') {
+			this.dispatchEvent({
+				'type': 'tag_point_added_to_platform',
+				'point': measurement.points[0].position
+			});
+		} else {
+			this.dispatchEvent({
+				'type': 'measurement_added_to_platform',
+				'scene': this,
+				'measurement': measurement
+			});
+		}
 	};
 
 	removeMeasurement (measurement) {
