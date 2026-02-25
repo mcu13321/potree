@@ -287,15 +287,20 @@ export class Measure extends THREE.Object3D {
 
 		this.azimuth = createAzimuth(this.viewer);
 
-		this.add(this.heightEdge);
-		this.add(this.heightLabel);
-		this.add(this.areaLabel);
-		this.add(this.circleRadiusLabel);
-		this.add(this.circleRadiusLine);
-		this.add(this.circleLine);
-		this.add(this.circleCenter);
+		this.geometryGroup = new THREE.Group();
+		this.textsGroup = new THREE.Group();
+		this.add(this.geometryGroup);
+		this.add(this.textsGroup);
 
-		this.add(this.azimuth.node);
+		this.geometryGroup.add(this.heightEdge);
+		this.textsGroup.add(this.heightLabel);
+		this.textsGroup.add(this.areaLabel);
+		this.textsGroup.add(this.circleRadiusLabel);
+		this.geometryGroup.add(this.circleRadiusLine);
+		this.geometryGroup.add(this.circleLine);
+		this.geometryGroup.add(this.circleCenter);
+
+		this.geometryGroup.add(this.azimuth.node);
 	}
 
 	creatMaterials() {
@@ -354,7 +359,6 @@ export class Measure extends THREE.Object3D {
 
 		// sphere
 		let sphere = new THREE.Sprite(this.MeasuringTool.activeMeasurement == this ? this.materialRed : this.materialBlue)
-		
 		const _camera = this.viewer.scene.getActiveCamera();
 		
 		if (_camera.isPerspectiveCamera) {
@@ -362,7 +366,7 @@ export class Measure extends THREE.Object3D {
 		} else {
 			sphere.scale.set(20 / 1000 * _camera.zoom, 20 / 1000 * _camera.zoom, 1)
 		}
-		this.add(sphere);
+		this.geometryGroup.add(sphere);
 		this.spheres.push(sphere);
 
 		{ // edges
@@ -383,26 +387,26 @@ export class Measure extends THREE.Object3D {
 			let edge = new Line2(lineGeometry, lineMaterial);
 			edge.visible = true;
 
-			this.add(edge);
+			this.geometryGroup.add(edge);
 			this.edges.push(edge);
 		}
 
 		{ // edge labels
 			let edgeLabel = new TextSprite('', this.viewer);
 			this.edgeLabels.push(edgeLabel);
-			this.add(edgeLabel);
+			this.textsGroup.add(edgeLabel);
 		}
 
 		{ // coordinate labels
 			let coordinateLabel = new TextSprite('', this.viewer);
 			this.coordinateLabels.push(coordinateLabel);
-			this.add(coordinateLabel);
+			this.textsGroup.add(coordinateLabel);
 		}
 
 		{ // angle labels
 			let angleLabel = new TextSprite('', this.viewer);
 			this.angleLabels.push(angleLabel);
-			this.add(angleLabel);
+			this.textsGroup.add(angleLabel);
 		}
 
 		let lineGeometry = new LineGeometry();
@@ -423,7 +427,7 @@ export class Measure extends THREE.Object3D {
 		placeholder.userData = {
 			type: 'placeholder',
 		}
-		this.add(placeholder);
+		this.geometryGroup.add(placeholder);
 
 		{ // Event Listeners
 			let drag = (e) => {
@@ -512,17 +516,17 @@ export class Measure extends THREE.Object3D {
 	removeMarker (index) {
 		this.points.splice(index, 1);
 
-		this.remove(this.spheres[index]);
+		this.geometryGroup.remove(this.spheres[index]);
 
 		let edgeIndex = (index === 0) ? 0 : (index - 1);
-		this.remove(this.edges[edgeIndex]);
+		this.geometryGroup.remove(this.edges[edgeIndex]);
 		this.edges.splice(edgeIndex, 1);
 
-		this.remove(this.edgeLabels[edgeIndex]);
+		this.textsGroup.remove(this.edgeLabels[edgeIndex]);
 		this.edgeLabels.splice(edgeIndex, 1);
 		this.coordinateLabels.splice(index, 1);
 		
-		this.remove(this.angleLabels[index]);
+		this.textsGroup.remove(this.angleLabels[index]);
 		this.angleLabels.splice(index, 1);
 
 		this.spheres.splice(index, 1);
