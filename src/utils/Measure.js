@@ -683,6 +683,23 @@ export class Measure extends THREE.Object3D {
 		}
 		centroid.divideScalar(this.points.length);
 
+		// 先计算所有原始角度
+		let allAngles = [];
+		if (this.points.length >= 3) {
+			for (let i = 0; i <= lastIndex; i++) {
+				let index = i;
+				let previousIndex = (i === 0) ? lastIndex : i - 1;
+				let nextIndex = (i + 1 > lastIndex) ? 0 : i + 1;
+
+				let point = this.points[index];
+				let previousPoint = this.points[previousIndex];
+				let nextPoint = this.points[nextIndex];
+
+				let angle = this.getAngleBetweenLines(point, previousPoint, nextPoint);
+				allAngles.push(angle);
+			}
+		}
+
 		for (let i = 0; i <= lastIndex; i++) {
 			let index = i;
 			let nextIndex = (i + 1 > lastIndex) ? 0 : i + 1;
@@ -745,7 +762,7 @@ export class Measure extends THREE.Object3D {
 
 			{ // angle labels
 				let angleLabel = this.angleLabels[i];
-				let angle = this.getAngleBetweenLines(point, previousPoint, nextPoint);
+				let angle = (allAngles.length > 0) ? allAngles[i] : this.getAngleBetweenLines(point, previousPoint, nextPoint);
 
 				let dir = nextPoint.position.clone().sub(previousPoint.position);
 				dir.multiplyScalar(0.5);
@@ -757,7 +774,19 @@ export class Measure extends THREE.Object3D {
 				let labelPos = point.position.clone().add(dir.multiplyScalar(dist));
 				angleLabel.position.copy(labelPos);
 
-				let msg = Utils.addCommas((angle * (180.0 / Math.PI)).toFixed(1)) + '\u00B0';
+				let angleDegree;
+				// 对于三角形，最后一个角度用180减去前两个角度，保证和为180
+				if (this.points.length === 3 && i === lastIndex) {
+					let angle0 = allAngles[0] * (180.0 / Math.PI);
+					let angle1 = allAngles[1] * (180.0 / Math.PI);
+					let angle0Display = parseFloat(angle0.toFixed(2));
+					let angle1Display = parseFloat(angle1.toFixed(2));
+					angleDegree = 180.0 - angle0Display - angle1Display;
+				} else {
+					angleDegree = angle * (180.0 / Math.PI);
+				}
+
+				let msg = Utils.addCommas(angleDegree.toFixed(2)) + '\u00B0';
 				angleLabel.setText(msg);
 				// angleLabel.visible = this.showAngles && (index <= lastIndex)
 				angleLabel.setVisible(this.showAngles && (index <= lastIndex) && this.points.length >= 3 && angle > 0)
