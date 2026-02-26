@@ -370,7 +370,9 @@ export class MeasuringTool extends EventDispatcher{
 
 		measure.addEventListener('measure_finished', measureFinished)
 
-		const p = args.position ? new THREE.Vector3().copy(args.position) : new THREE.Vector3(100000, 100000, 0) 
+		// const p = args.position ? new THREE.Vector3().copy(args.position) : new THREE.Vector3(100000, 100000, 0) 
+		const p = new THREE.Vector3(100000, 100000, 0) 
+
 		measure.addMarker(p);
 		
 		this.viewer.inputHandler.startDragging(measure.spheres[measure.spheres.length - 1]);
