@@ -438,29 +438,81 @@ export class Measure extends THREE.Object3D {
 					e.viewer.scene.pointclouds,
 					{pickClipped: true});
 
-				if (I) {
-					let i = this.spheres.indexOf(e.drag.object);
-					if (i !== -1) {
-						let point = this.points[i];
-						
-						// loop through current keys and cleanup ones that will be orphaned
-						for (let key of Object.keys(point)) {
-							if (!I.point[key]) {
-								delete point[key];
+				let i = this.spheres.indexOf(e.drag.object);
+				if (i !== -1) {
+					let location = null;
+					let usePlaneIntersection = false;
+					let intersectPoint = new THREE.Vector3();
+
+					if (this.name === 'area' && this.points.length >= 3) {
+						// 确定基准面
+						let hasPlane = false;
+						if (!this._areaPlane) {
+							// 尝试缓存前三个点的基准面
+							// 注意：如果在创建过程中的第三个点，此时它的位置可能还未确定（但已经在points数组里）
+							// 只有当有 >=4 个点，或已经结束测量时（this.finished === true），才建立/强制使用平面
+							if (this.points.length >= 4 || this.finished) {
+								let p0 = this.points[0].position;
+								let p1 = this.points[1].position;
+								let p2 = this.points[2].position;
+								this._areaPlane = new THREE.Plane().setFromCoplanarPoints(p0, p1, p2);
 							}
 						}
 
-						for (let key of Object.keys(I.point).filter(e => e !== 'position')) {
-							point[key] = I.point[key];
+						if (this._areaPlane && this._areaPlane.normal.lengthSq() > 0) {
+							hasPlane = true;
 						}
-						this.setPosition(i, I.location);
+
+						// 什么时候强制平面相交：
+						// 1. 已有平面，且当前拖拽的是第4个及以后的点（i >= 3）
+						// 2. 已有平面，并且测量已经结束了（this.finished === true），那么拖拽修改任何一个点都要在这个平面上
+						if (hasPlane && (i >= 3 || this.finished)) {
+							let mouse = e.drag.end;
+							let camera = e.viewer.scene.getActiveCamera();
+							let renderer = e.viewer.renderer;
+							let nmouse = {
+								x: (mouse.x / renderer.domElement.clientWidth) * 2 - 1,
+								y: -(mouse.y / renderer.domElement.clientHeight) * 2 + 1
+							};
+							
+							let raycaster = new THREE.Raycaster();
+							raycaster.setFromCamera(nmouse, camera);
+							if (raycaster.ray.intersectPlane(this._areaPlane, intersectPoint)) {
+								location = intersectPoint;
+								usePlaneIntersection = true;
+							}
+						}
+					}
+
+					if (!usePlaneIntersection && I) {
+						location = I.location.clone();
+						// 如果因为退格把缓存平面删了，我们要允许继续在点云上漫游找点
+					}
+
+					if (location) {
+						let point = this.points[i];
+						
+						if (I && I.point) {
+							// loop through current keys and cleanup ones that will be orphaned
+							for (let key of Object.keys(point)) {
+								if (!I.point[key]) {
+									delete point[key];
+								}
+							}
+
+							for (let key of Object.keys(I.point).filter(k => k !== 'position')) {
+								point[key] = I.point[key];
+							}
+						}
+						
+						this.setPosition(i, location);
 						placeholder.geometry.setPositions([
-							I.location.x,
-							I.location.y,
-							I.location.z,
-							I.location.x,
-							I.location.y,
-							I.location.z,
+							location.x,
+							location.y,
+							location.z,
+							location.x,
+							location.y,
+							location.z,
 						]);
 					}
 				}
@@ -568,20 +620,147 @@ export class Measure extends THREE.Object3D {
 	getArea () {
 		let n = this.points.length;
 		if (n < 3) return 0;
+
+		// 1. 获取平面法线并构建局部2D坐标系 (u, v)
+		let p0 = this.points[0].position;
+		let p1 = this.points[1].position;
+		let p2 = this.points[2].position;
 		
-		let nx = 0, ny = 0, nz = 0;
+		let v1 = new THREE.Vector3().subVectors(p1, p0);
+		let v2 = new THREE.Vector3().subVectors(p2, p0);
+		let normal = new THREE.Vector3().crossVectors(v1, v2);
+
+		if (normal.lengthSq() === 0) {
+			// 前三点共线，寻找非共线的点
+			for (let i = 3; i < n; i++) {
+				v2 = new THREE.Vector3().subVectors(this.points[i].position, p0);
+				normal.crossVectors(v1, v2);
+				if (normal.lengthSq() > 0) break;
+			}
+		}
+
+		if (normal.lengthSq() === 0) return 0; // 所有点共线
+		normal.normalize();
+
+		// 取与 normal 正交的向量作为 u 轴，再叉乘得到 v 轴
+		let uAxis = v1.clone().normalize();
+		let vAxis = new THREE.Vector3().crossVectors(normal, uAxis).normalize();
+
+		// 2. 投影所有点到局部 2D 平面
+		let pts2d = [];
 		for (let i = 0; i < n; i++) {
-			let p1 = this.points[i].position;
-			let p2 = this.points[(i + 1) % n].position; // 闭合回路
-			
-			// 分别计算在 YZ, ZX, XY 平面上的投影贡献
-			nx += (p1.y - p2.y) * (p1.z + p2.z);
-			ny += (p1.z - p2.z) * (p1.x + p2.x);
-			nz += (p1.x - p2.x) * (p1.y + p2.y);
+			let vec = new THREE.Vector3().subVectors(this.points[i].position, p0);
+			pts2d.push({
+				x: vec.dot(uAxis),
+				y: vec.dot(vAxis),
+				originalIndex: i
+			});
+		}
+
+		// 3. 寻找所有线段交点
+		// 线段集合: (0,1), (1,2), ..., (n-1, 0)
+		let segments = [];
+		for (let i = 0; i < n; i++) {
+			let j = (i + 1) % n;
+			segments.push({
+				start: pts2d[i],
+				end: pts2d[j],
+				intersections: [] // 存储由于与其他线段相交产生的中间点
+			});
+		}
+
+		const EPSILON = 1e-6;
+
+		for (let i = 0; i < n; i++) {
+			for (let j = i + 2; j < n; j++) {
+				if (i === 0 && j === n - 1) continue; // 首尾相连的边天然在端点相交
+
+				let segA = segments[i];
+				let segB = segments[j];
+
+				let x1 = segA.start.x, y1 = segA.start.y;
+				let x2 = segA.end.x, y2 = segA.end.y;
+				let x3 = segB.start.x, y3 = segB.start.y;
+				let x4 = segB.end.x, y4 = segB.end.y;
+
+				let denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+				if (Math.abs(denom) < EPSILON) continue; // 平行或共线
+
+				let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+				let u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+
+				if (t > EPSILON && t < 1 - EPSILON && u > EPSILON && u < 1 - EPSILON) {
+					// 存在严格内部交点
+					let intersectPoint = {
+						x: x1 + t * (x2 - x1),
+						y: y1 + t * (y2 - y1),
+						isIntersection: true
+					};
+					// 按照距离起点远近(t/u比例)插入，方便从头走到尾
+					segA.intersections.push({ pt: intersectPoint, param: t });
+					segB.intersections.push({ pt: intersectPoint, param: u });
+				}
+			}
+		}
+
+		// 对各条线段上的交点按 param 排序
+		for (let i = 0; i < n; i++) {
+			segments[i].intersections.sort((a, b) => a.param - b.param);
+		}
+
+		// 4. 重构连续路径 (Eulerian-like string of vertices)
+		let path = [];
+		for (let i = 0; i < n; i++) {
+			path.push(segments[i].start);
+			for (let inter of segments[i].intersections) {
+				path.push(inter.pt);
+			}
+		}
+
+		// 5. 使用栈分解环路并合计绝对面积
+		function calcArea2D(polyLine) {
+			let area = 0;
+			let m = polyLine.length;
+			for (let k = 0; k < m; k++) {
+				let nextK = (k + 1) % m;
+				area += polyLine[k].x * polyLine[nextK].y;
+				area -= polyLine[nextK].x * polyLine[k].y;
+			}
+			return Math.abs(area) / 2;
+		}
+
+		let totalArea = 0;
+		let stack = [];
+		
+		for (let i = 0; i < path.length; i++) {
+			let p = path[i];
+			// 查找栈里是否已经有这个点了 (按极小误差判定)
+			let loopIndex = -1;
+			for (let s = stack.length - 1; s >= 0; s--) {
+				let sp = stack[s];
+				if (Math.abs(sp.x - p.x) < EPSILON && Math.abs(sp.y - p.y) < EPSILON) {
+					loopIndex = s;
+					break;
+				}
+			}
+
+			if (loopIndex !== -1) {
+				// 提取出了一个闭合子环！
+				let subPolygon = stack.splice(loopIndex); 
+				totalArea += calcArea2D(subPolygon);
+				// 交点自己仍需压栈作为后面半个环的起点参与构建
+				stack.push(p); 
+			} else {
+				stack.push(p);
+			}
 		}
 		
-		// 合成向量模长的一半即为面积
-		return 0.5 * Math.sqrt(nx * nx + ny * ny + nz * nz);
+		// 最后栈里还会剩下一个主环
+		if (stack.length > 2) {
+			totalArea += calcArea2D(stack);
+		}
+
+		return totalArea;
 	};
 
 	getTotalDistance () {

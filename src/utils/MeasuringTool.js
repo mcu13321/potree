@@ -274,8 +274,9 @@ export class MeasuringTool extends EventDispatcher{
 				);
 				const hasMoved = distance > 1;
 				let hoveredPoint = this.viewer.inputHandler.hoveredPoint;
+				let isAreaPlaneClick = this.eventMeasurement && this.eventMeasurement.name === 'area' && this.eventMeasurement.points.length >= 4;
 				
-				if ((e.button === THREE.MOUSE.LEFT || e.type === 'touchend') && !hasMoved && hoveredPoint) {
+				if ((e.button === THREE.MOUSE.LEFT || e.type === 'touchend') && !hasMoved && (hoveredPoint || isAreaPlaneClick)) {
 
 					if (this.eventMeasurement.points.length >= this.eventMeasurement.maxMarkers) {
 						cancel.callback();
