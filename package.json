@@ -19,6 +19,7 @@
   "scripts": {
     "start": "gulp watch",
     "build": "gulp build pack",
+    "test": "vitest run",
     "postinstall": "npm run build"
   },
   "dependencies": {
@@ -33,6 +34,8 @@
   "license": "BSD-2-CLAUSE",
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.0",
-    "@rollup/plugin-node-resolve": "^16.0.3"
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "jsdom": "^28.1.0",
+    "vitest": "^4.0.18"
   }
 }

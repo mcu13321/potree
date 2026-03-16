@@ -57,7 +57,11 @@ export * from "./utils/SpotLightHelper.js";
 export * from "./utils/TransformationTool.js";
 export * from "./utils/Volume.js";
 export * from "./utils/VolumeTool.js";
+export * from "./utils/BoundingBox.js";
+export * from "./utils/BoundingBoxTool.js";
 export * from "./utils/Compass.js";
+export * from "./utils/RectangleSVGTool.js";
+export * from "./utils/PolygonSVGTool.js";
 
 export * from "./viewer/viewer.js";
 export * from "./viewer/Scene.js";

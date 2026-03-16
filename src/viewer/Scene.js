@@ -30,6 +30,7 @@ export class Scene extends EventDispatcher{
 		this.measurements = [];
 		this.profiles = [];
 		this.volumes = [];
+		this.boundingBoxes = [];
 		this.polygonClipVolumes = [];
 		this.cameraAnimations = [];
 		this.orientedImages = [];
@@ -240,6 +241,28 @@ export class Scene extends EventDispatcher{
 		}
 	};
 
+	addBoundingBox (boundingBox) {
+		this.boundingBoxes.push(boundingBox);
+		this.dispatchEvent({
+			'type': 'bounding_box_added',
+			'scene': this,
+			'boundingBox': boundingBox
+		});
+	}
+
+	removeBoundingBox (boundingBox) {
+		let index = this.boundingBoxes.indexOf(boundingBox);
+		if (index > -1) {
+			this.boundingBoxes.splice(index, 1);
+
+			this.dispatchEvent({
+				'type': 'bounding_box_removed',
+				'scene': this,
+				'boundingBox': boundingBox
+			});
+		}
+	}
+
 	addCameraAnimation(animation) {
 		this.cameraAnimations.push(animation);
 		this.dispatchEvent({
@@ -353,6 +376,10 @@ export class Scene extends EventDispatcher{
 
 		while (this.volumes.length > 0) {
 			this.removeVolume(this.volumes[0]);
+		}
+
+		while (this.boundingBoxes.length > 0) {
+			this.removeBoundingBox(this.boundingBoxes[0]);
 		}
 	}
 
