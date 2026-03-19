@@ -117,49 +117,64 @@ export class HQSplatRenderer{
 		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
 		const originalMaterials = new Map();
 
-		const bbox = this.viewer.scene.getBoundingBox(this.viewer.scene.pointclouds);
-		const center = new THREE.Vector3();
-		bbox.getCenter(center);
-		const size = new THREE.Vector3();
-		bbox.getSize(size);
-		const maxDimension = Math.max(size.x, size.y, size.z);
-		const distanceToCenter = camera.position.distanceTo(center);
-		const nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
-		const farthestDistance = distanceToCenter + maxDimension / 2;
-
 		for(let pointcloud of visiblePointClouds){
 			originalMaterials.set(pointcloud, pointcloud.material);
 
+			const enabled = Boolean(pointcloud.userData?.xrayEnabled);
+			let opacity = pointcloud.userData?.xrayOpacity;
+			if(typeof opacity !== "number" || Number.isNaN(opacity)){
+				opacity = 0.5;
+			}
+
+			let nearestDistance = 0;
+			let farthestDistance = 0;
+			if(enabled){
+				const bbox = this.viewer.scene.getBoundingBox([pointcloud]);
+				const center = new THREE.Vector3();
+				bbox.getCenter(center);
+				const size = new THREE.Vector3();
+				bbox.getSize(size);
+				const maxDimension = Math.max(size.x, size.y, size.z);
+				const distanceToCenter = camera.position.distanceTo(center);
+				nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
+				farthestDistance = distanceToCenter + maxDimension / 2;
+			}
+
 			if(!this.attributeMaterials.has(pointcloud)){
 				let attributeMaterial = new PointCloudMaterial();
-				if (viewer.useXRAY) {
-					attributeMaterial.useXRAY = true;
-					attributeMaterial.opacity = 0.5;
+				attributeMaterial.useXRAY = enabled;
+				attributeMaterial.opacity = enabled ? opacity : 1.0;
+				if(enabled){
 					attributeMaterial.cameraPosition = camera.position;
 					attributeMaterial.uNear = nearestDistance;
 					attributeMaterial.uFar = farthestDistance;
-				} else {
-					attributeMaterial.useXRAY = false;
-					attributeMaterial.opacity = 1.0;
 				}
 
 				this.attributeMaterials.set(pointcloud, attributeMaterial);
+			}else{
+				const attributeMaterial = this.attributeMaterials.get(pointcloud);
+				attributeMaterial.useXRAY = enabled;
+				attributeMaterial.opacity = enabled ? opacity : 1.0;
+				if(enabled){
+					attributeMaterial.cameraPosition = camera.position;
+					attributeMaterial.uNear = nearestDistance;
+					attributeMaterial.uFar = farthestDistance;
+				}
 			}
 
 			if(!this.depthMaterials.has(pointcloud)){
 				let depthMaterial = new PointCloudMaterial();
-				if (viewer.useXRAY) {
-					depthMaterial.useXRAY = true;
-					depthMaterial.opacity = 0.5;
-				} else {
-					depthMaterial.useXRAY = false;
-					depthMaterial.opacity = 1.0;
-				}
+				depthMaterial.useXRAY = enabled;
+				depthMaterial.opacity = enabled ? opacity : 1.0;
 
 				depthMaterial.setDefine("depth_pass", "#define hq_depth_pass");
 				depthMaterial.setDefine("use_edl", "#define use_edl");
 
 				this.depthMaterials.set(pointcloud, depthMaterial);
+			}else{
+				const depthMaterial = this.depthMaterials.get(pointcloud);
+				depthMaterial.useXRAY = enabled;
+				depthMaterial.opacity = enabled ? opacity : 1.0;
 			}
 		}
 

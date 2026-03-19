@@ -140,7 +140,6 @@ export class Viewer extends EventDispatcher{
 		this.edlRadius = 1.4;
 		this.edlOpacity = 1.0;
 		this.useEDL = false;
-		this.useXRAY = false;
 		this.description = "";
 
 		this.classifications = ClassificationScheme.DEFAULT;
@@ -638,8 +637,16 @@ export class Viewer extends EventDispatcher{
 
 	setXRAYEnabled (value) {
 		value = Boolean(value);
-		if (this.useXRAY !== value) {
-			this.useXRAY = value;
+
+		if(!this.scene){
+			return;
+		}
+
+		for(const pointcloud of this.scene.pointclouds){
+			if(!pointcloud.userData){
+				pointcloud.userData = {};
+			}
+			pointcloud.userData.xrayEnabled = value;
 		}
 	};
 
@@ -1957,7 +1964,6 @@ export class Viewer extends EventDispatcher{
 				this.hqRenderer = new HQSplatRenderer(this);
 			}
 			this.hqRenderer.useEDL = this.useEDL;
-			this.hqRenderer.useXRAY = this.useXRAY;
 
 			return this.hqRenderer;
 		}else{

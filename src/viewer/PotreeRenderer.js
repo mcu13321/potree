@@ -74,29 +74,32 @@ export class PotreeRenderer {
 			const {material} = pointcloud;
 			material.useEDL = false;
 		}
-		if (viewer.useXRAY) {
-			// debugger
-			const bbox = this.viewer.scene.getBoundingBox(this.viewer.scene.pointclouds);
-			const center = new THREE.Vector3();
-			bbox.getCenter(center);
-			const size = new THREE.Vector3();
-			bbox.getSize(size);
-			const maxDimension = Math.max(size.x, size.y, size.z);
-			const distanceToCenter = camera.position.distanceTo(center);
-			const nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
-			const farthestDistance = distanceToCenter + maxDimension / 2;
+		
+		for(const pointcloud of this.viewer.scene.pointclouds){
+			const {material} = pointcloud;
+			const enabled = Boolean(pointcloud.userData?.xrayEnabled);
+			let opacity = pointcloud.userData?.xrayOpacity;
+			if(typeof opacity !== "number" || Number.isNaN(opacity)){
+				opacity = 0.5;
+			}
 
-			for(let pointcloud of this.viewer.scene.pointclouds){
-				const {material} = pointcloud;
+			if(enabled){
+				const bbox = this.viewer.scene.getBoundingBox([pointcloud]);
+				const center = new THREE.Vector3();
+				bbox.getCenter(center);
+				const size = new THREE.Vector3();
+				bbox.getSize(size);
+				const maxDimension = Math.max(size.x, size.y, size.z);
+				const distanceToCenter = camera.position.distanceTo(center);
+				const nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
+				const farthestDistance = distanceToCenter + maxDimension / 2;
+
 				material.useXRAY = true;
-				material.opacity = 0.5;
+				material.opacity = opacity;
 				material.cameraPosition = camera.position;
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
-			}
-		} else {
-			for(let pointcloud of this.viewer.scene.pointclouds){
-				const {material} = pointcloud;
+			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;
 			}
