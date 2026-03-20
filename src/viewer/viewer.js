@@ -20,7 +20,7 @@ import {AnnotationTool} from "../utils/AnnotationTool.js";
 import {MeasuringTool} from "../utils/MeasuringTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
-import {BoundingBoxTool} from "../utils/BoundingBoxTool.js";
+import {TreeTagTool} from "../utils/TreeTagTool.js";
 import {RectangleSVGTool} from "../utils/RectangleSVGTool.js";
 import {PolygonSVGTool} from "../utils/PolygonSVGTool.js";
 
@@ -329,7 +329,7 @@ export class Viewer extends EventDispatcher{
 		this.measuringTool = new MeasuringTool(this);
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);
-		this.boundingBoxTool = new BoundingBoxTool(this);
+		this.treeTagTool = new TreeTagTool(this);
 		this.rectangleSVGTool = new RectangleSVGTool(this);
 		this.polygonSVGTool = new PolygonSVGTool(this);
 
