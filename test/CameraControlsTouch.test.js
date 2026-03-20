@@ -28,6 +28,21 @@ function createPointerEvent(type, {
 	return event;
 }
 
+function createTouchEvent(type, {
+	touches = [],
+	changedTouches = [],
+} = {}) {
+	const event = new Event(type, {
+		bubbles: true,
+		cancelable: true,
+	});
+
+	Object.defineProperty(event, "touches", {value: touches});
+	Object.defineProperty(event, "changedTouches", {value: changedTouches});
+
+	return event;
+}
+
 function createMockScene(camera) {
 	return {
 		getActiveCamera() {
@@ -52,9 +67,9 @@ function createDomElement() {
 	return domElement;
 }
 
-describe("CameraControls 单指触摸仲裁", () => {
+describe("CameraControls 触摸状态回收", () => {
 	beforeAll(() => {
-		// 让测试中的 camera-controls 绑定当前 three 实例，避免依赖外部全局状态。
+		// 让测试使用当前 three 实例，避免依赖外部全局状态。
 		CameraControls.install({THREE});
 		if (!window.PointerEvent) {
 			window.PointerEvent = window.MouseEvent;
@@ -114,6 +129,94 @@ describe("CameraControls 单指触摸仲裁", () => {
 		expect(controlStart).toHaveBeenCalledTimes(1);
 		expect(control).toHaveBeenCalled();
 		expect(controlEnd).toHaveBeenCalledTimes(1);
+
+		controls.disconnect();
+	});
+
+	it("双指缩放后即使漏掉一根手指的 pointerup，也应回退为单指旋转", () => {
+		const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+		const controls = new CameraControls(createMockScene(camera));
+		const domElement = createDomElement();
+
+		controls.connect(domElement);
+
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 1, clientX: 20, clientY: 20}));
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 2, clientX: 80, clientY: 80}));
+
+		// 用 touchend 快照模拟 WebView 只告诉页面还剩下一根手指，但漏掉了另一根手指的 pointerup。
+		domElement.dispatchEvent(createTouchEvent("touchend", {
+			touches: [{clientX: 84, clientY: 84}],
+			changedTouches: [{clientX: 20, clientY: 20}],
+		}));
+
+		expect(controls._activePointers.length).toBe(1);
+		expect(controls._activePointers[0].pointerId).toBe(2);
+
+		document.dispatchEvent(createPointerEvent("pointermove", {
+			pointerId: 2,
+			clientX: 90,
+			clientY: 88,
+			movementX: 6,
+			movementY: 4,
+		}));
+
+		expect(controls._activePointers.length).toBe(1);
+		expect(controls._state).toBe(CameraControls.ACTION.TOUCH_ROTATE);
+
+		controls.disconnect();
+	});
+
+	it("touchcancel 快照为 0 时应清空残留触点并结束控制", () => {
+		const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+		const controls = new CameraControls(createMockScene(camera));
+		const domElement = createDomElement();
+		const controlEnd = vi.fn();
+
+		controls.addEventListener("controlend", controlEnd);
+		controls.connect(domElement);
+
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 1, clientX: 20, clientY: 20}));
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 2, clientX: 80, clientY: 80}));
+		domElement.dispatchEvent(createTouchEvent("touchcancel", {
+			touches: [],
+			changedTouches: [{clientX: 20, clientY: 20}, {clientX: 80, clientY: 80}],
+		}));
+
+		expect(controls._activePointers.length).toBe(0);
+		expect(controls._state).toBe(CameraControls.ACTION.NONE);
+		expect(controlEnd).toHaveBeenCalled();
+
+		controls.disconnect();
+	});
+
+	it("正常浏览器路径下完整的 pointerup 仍应回退为单指旋转", () => {
+		const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+		const controls = new CameraControls(createMockScene(camera));
+		const domElement = createDomElement();
+
+		controls.connect(domElement);
+
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 1, clientX: 20, clientY: 20}));
+		domElement.dispatchEvent(createPointerEvent("pointerdown", {pointerId: 2, clientX: 80, clientY: 80}));
+		document.dispatchEvent(createPointerEvent("pointerup", {
+			pointerId: 1,
+			clientX: 20,
+			clientY: 20,
+			buttons: 0,
+		}));
+
+		expect(controls._activePointers.length).toBe(1);
+		expect(controls._activePointers[0].pointerId).toBe(2);
+
+		document.dispatchEvent(createPointerEvent("pointermove", {
+			pointerId: 2,
+			clientX: 88,
+			clientY: 84,
+			movementX: 8,
+			movementY: 4,
+		}));
+
+		expect(controls._state).toBe(CameraControls.ACTION.TOUCH_ROTATE);
 
 		controls.disconnect();
 	});

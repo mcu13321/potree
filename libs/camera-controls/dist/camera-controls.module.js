@@ -684,9 +684,156 @@ class CameraControls extends EventDispatcher {
         // 单指测量手势待决态，只有越过阈值后才切入正常控制。
         this._pendingSingleTouchMeasurementGesture = false;
         this._singleTouchStartPosition = new THREE.Vector2();
+        // 缓存最近一次 touch 事件中的 touches 快照，用于修复 WebView 下丢失的 pointerup/pointercancel。
+        this._latestTouchSnapshot = [];
+        this._latestTouchCount = 0;
+        this._latestTouchSnapshotAt = 0;
         const dragStartPosition = new THREE.Vector2();
         const lastDragPosition = new THREE.Vector2();
         const dollyStart = new THREE.Vector2();
+        const getActiveTouchPointers = () => {
+            return this._activePointers.filter((pointer) => pointer.pointerType === 'touch');
+        };
+        const updateTouchSnapshot = (event) => {
+            const touches = Array.from((event === null || event === void 0 ? void 0 : event.touches) || []);
+            this._latestTouchSnapshot = touches.map((touch) => ({
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+            }));
+            this._latestTouchCount = this._latestTouchSnapshot.length;
+            this._latestTouchSnapshotAt = typeof (event === null || event === void 0 ? void 0 : event.timeStamp) === 'number' ? event.timeStamp : performance.now();
+        };
+        const hasFreshTouchSnapshot = (event) => {
+            if (!event)
+                return true;
+            if (this._latestTouchSnapshotAt === 0)
+                return false;
+            if (typeof event.timeStamp !== 'number')
+                return true;
+            return this._latestTouchSnapshotAt >= event.timeStamp - 100;
+        };
+        const rebaseDragStateAfterTouchReconcile = (touchPointers = getActiveTouchPointers()) => {
+            if (touchPointers.length === 0) {
+                dragStartPosition.set(0, 0);
+                lastDragPosition.set(0, 0);
+                dollyStart.set(0, 0);
+                if (this._pendingSingleTouchMeasurementGesture) {
+                    resetSingleTouchMeasurementGesture();
+                }
+                return;
+            }
+            if (touchPointers.length === 1) {
+                const pointer = touchPointers[0];
+                dragStartPosition.set(pointer.clientX, pointer.clientY);
+                lastDragPosition.set(pointer.clientX, pointer.clientY);
+                dollyStart.set(0, 0);
+                if (this._pendingSingleTouchMeasurementGesture) {
+                    this._singleTouchStartPosition.set(pointer.clientX, pointer.clientY);
+                }
+                return;
+            }
+            extractClientCoordFromEvent(touchPointers, _v2);
+            dragStartPosition.copy(_v2);
+            lastDragPosition.copy(_v2);
+            const dx = _v2.x - touchPointers[1].clientX;
+            const dy = _v2.y - touchPointers[1].clientY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            dollyStart.set(0, distance);
+        };
+        const updateTouchStateFromActivePointers = () => {
+            const touchPointers = getActiveTouchPointers();
+            this._state = ACTION.NONE;
+            switch (touchPointers.length) {
+                case 1:
+                    this._state = this.touches.one;
+                    break;
+                case 2:
+                    this._state = this.touches.two();
+                    break;
+                case 3:
+                    this._state = this.touches.three;
+                    break;
+            }
+        };
+        const finalizeReconciledDragging = () => {
+            if (this._activePointers.length === 0 ||
+                (this._activePointers.length === 1 && this._activePointers[0] === this._lockedPointer)) {
+                this._isDragging = false;
+            }
+            if (this._activePointers.length === 0 && this._domElement) {
+                this._dragNeedsUpdate = false;
+                this._domElement.ownerDocument.removeEventListener('pointermove', onPointerMove, { passive: false });
+                this._domElement.ownerDocument.removeEventListener('pointerup', onPointerUp);
+                this.dispatchEvent({ type: 'controlend' });
+            }
+        };
+        const chooseClosestPointer = (candidates, snapshot, excluded = new Set()) => {
+            let chosenPointer = null;
+            let minDistance = Infinity;
+            for (const pointer of candidates) {
+                if (excluded.has(pointer))
+                    continue;
+                const distance = Math.hypot(pointer.clientX - snapshot.clientX, pointer.clientY - snapshot.clientY);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    chosenPointer = pointer;
+                }
+            }
+            return chosenPointer;
+        };
+        const reconcileActiveTouchPointers = (pointerEvent) => {
+            if (pointerEvent && !hasFreshTouchSnapshot(pointerEvent))
+                return false;
+            const touchPointers = getActiveTouchPointers();
+            if (touchPointers.length === 0) {
+                if (this._latestTouchCount === 0 && this._pendingSingleTouchMeasurementGesture) {
+                    resetSingleTouchMeasurementGesture();
+                }
+                return false;
+            }
+            if (this._latestTouchCount >= touchPointers.length)
+                return false;
+            let retainedPointers = [];
+            if (this._latestTouchCount === 0) {
+                retainedPointers = [];
+            }
+            else if (this._latestTouchCount === 1) {
+                const snapshot = this._latestTouchSnapshot[0];
+                const shouldPreferCurrentPointer = !!pointerEvent && pointerEvent.type !== 'pointerup' && pointerEvent.type !== 'pointercancel';
+                const currentPointer = shouldPreferCurrentPointer ? this._findPointerById(pointerEvent.pointerId) : null;
+                const retainedPointer = (currentPointer === null || currentPointer === void 0 ? void 0 : currentPointer.pointerType) === 'touch' ? currentPointer : chooseClosestPointer(touchPointers, snapshot);
+                retainedPointers = retainedPointer ? [retainedPointer] : [];
+                if (retainedPointer && snapshot) {
+                    retainedPointer.clientX = snapshot.clientX;
+                    retainedPointer.clientY = snapshot.clientY;
+                }
+            }
+            else {
+                const excluded = new Set();
+                for (const snapshot of this._latestTouchSnapshot.slice(0, 2)) {
+                    const retainedPointer = chooseClosestPointer(touchPointers, snapshot, excluded);
+                    if (!retainedPointer)
+                        continue;
+                    retainedPointer.clientX = snapshot.clientX;
+                    retainedPointer.clientY = snapshot.clientY;
+                    retainedPointers.push(retainedPointer);
+                    excluded.add(retainedPointer);
+                }
+            }
+            const retainedSet = new Set(retainedPointers);
+            for (const pointer of touchPointers) {
+                if (!retainedSet.has(pointer)) {
+                    this._disposePointer(pointer);
+                }
+            }
+            if (this._pendingSingleTouchMeasurementGesture && this._latestTouchCount === 0) {
+                resetSingleTouchMeasurementGesture();
+            }
+            rebaseDragStateAfterTouchReconcile(retainedPointers);
+            updateTouchStateFromActivePointers();
+            finalizeReconciledDragging();
+            return true;
+        };
         const shouldDeferSingleTouchMeasurementGesture = (event) => {
             var _a;
             return event.pointerType === 'touch' &&
@@ -698,9 +845,17 @@ class CameraControls extends EventDispatcher {
             this._pendingSingleTouchMeasurementGesture = false;
             this._singleTouchStartPosition.set(0, 0);
         };
+        const onTouchSnapshotEvent = (event) => {
+            updateTouchSnapshot(event);
+            reconcileActiveTouchPointers();
+        };
         const onPointerDown = (event) => {
             if (!this._enabled || !this._domElement)
                 return;
+            if (event.pointerType === 'touch') {
+                // 先用最近一次 touch 快照清理上一个手势残留的脏触点，再接收新的 pointerdown。
+                reconcileActiveTouchPointers(event);
+            }
             if (this._interactiveArea.left !== 0 ||
                 this._interactiveArea.top !== 0 ||
                 this._interactiveArea.width !== 1 ||
@@ -731,6 +886,7 @@ class CameraControls extends EventDispatcher {
                 return;
             const pointer = {
                 pointerId: event.pointerId,
+                pointerType: event.pointerType,
                 clientX: event.clientX,
                 clientY: event.clientY,
                 deltaX: 0,
@@ -765,6 +921,9 @@ class CameraControls extends EventDispatcher {
         const onPointerMove = (event) => {
             if (event.cancelable)
                 event.preventDefault();
+            if (event.pointerType === 'touch') {
+                reconcileActiveTouchPointers(event);
+            }
             const pointerId = event.pointerId;
             const pointer = this._lockedPointer || this._findPointerById(pointerId);
             if (!pointer)
@@ -812,6 +971,13 @@ class CameraControls extends EventDispatcher {
             dragging();
         };
         const onPointerUp = (event) => {
+            let touchPointersReconciled = false;
+            if (event.pointerType === 'touch') {
+                touchPointersReconciled = reconcileActiveTouchPointers(event);
+                if (touchPointersReconciled && this._activePointers.length === 0) {
+                    return;
+                }
+            }
             if (this._pendingSingleTouchMeasurementGesture && event.pointerType === 'touch') {
                 const pointer = this._findPointerById(event.pointerId);
                 pointer && this._disposePointer(pointer);
@@ -1131,8 +1297,11 @@ class CameraControls extends EventDispatcher {
             this.dispatchEvent({ type: 'control' });
         };
         const endDragging = () => {
-            extractClientCoordFromEvent(this._activePointers, _v2);
-            lastDragPosition.copy(_v2);
+            // 没有活动指针时跳过坐标提取，避免在异常回收路径下写入 NaN。
+            if (this._activePointers.length > 0) {
+                extractClientCoordFromEvent(this._activePointers, _v2);
+                lastDragPosition.copy(_v2);
+            }
             this._dragNeedsUpdate = false;
             if (this._activePointers.length === 0 ||
                 (this._activePointers.length === 1 && this._activePointers[0] === this._lockedPointer)) {
@@ -1193,6 +1362,11 @@ class CameraControls extends EventDispatcher {
             this._domElement.style.touchAction = 'none';
             this._domElement.style.userSelect = 'none';
             this._domElement.style.webkitUserSelect = 'none';
+            // 使用 touch 事件只维护触点快照，不参与实际控制计算。
+            this._domElement.addEventListener('touchstart', onTouchSnapshotEvent);
+            this._domElement.addEventListener('touchmove', onTouchSnapshotEvent);
+            this._domElement.addEventListener('touchend', onTouchSnapshotEvent);
+            this._domElement.addEventListener('touchcancel', onTouchSnapshotEvent);
             this._domElement.addEventListener('pointerdown', onPointerDown);
             this._domElement.addEventListener('pointercancel', onPointerUp);
             this._domElement.addEventListener('wheel', onMouseWheel, { passive: false });
@@ -1204,6 +1378,10 @@ class CameraControls extends EventDispatcher {
             this._domElement.style.touchAction = '';
             this._domElement.style.userSelect = '';
             this._domElement.style.webkitUserSelect = '';
+            this._domElement.removeEventListener('touchstart', onTouchSnapshotEvent);
+            this._domElement.removeEventListener('touchmove', onTouchSnapshotEvent);
+            this._domElement.removeEventListener('touchend', onTouchSnapshotEvent);
+            this._domElement.removeEventListener('touchcancel', onTouchSnapshotEvent);
             this._domElement.removeEventListener('pointerdown', onPointerDown);
             this._domElement.removeEventListener('pointercancel', onPointerUp);
             // https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/removeEventListener#matching_event_listeners_for_removal
@@ -1223,6 +1401,9 @@ class CameraControls extends EventDispatcher {
                 return;
             this._state = ACTION.NONE;
             this._activePointers.length = 0;
+            this._latestTouchSnapshot = [];
+            this._latestTouchCount = 0;
+            this._latestTouchSnapshotAt = 0;
             resetSingleTouchMeasurementGesture();
             endDragging();
         };
