@@ -677,9 +677,27 @@ class CameraControls extends EventDispatcher {
                     ACTION.NONE,
             three: ACTION.TOUCH_TRUCK,
         };
+        // 允许宿主在测量插入期间为单指轻点设置仲裁阈值。
+        this.touchTapThreshold = 8;
+        // 允许宿主按当前业务状态决定是否接管单指轻点。
+        this.shouldCaptureSingleTouch = null;
+        // 单指测量手势待决态，只有越过阈值后才切入正常控制。
+        this._pendingSingleTouchMeasurementGesture = false;
+        this._singleTouchStartPosition = new THREE.Vector2();
         const dragStartPosition = new THREE.Vector2();
         const lastDragPosition = new THREE.Vector2();
         const dollyStart = new THREE.Vector2();
+        const shouldDeferSingleTouchMeasurementGesture = (event) => {
+            var _a;
+            return event.pointerType === 'touch' &&
+                this._activePointers.length === 1 &&
+                typeof this.shouldCaptureSingleTouch === 'function' &&
+                ((_a = this.shouldCaptureSingleTouch) === null || _a === void 0 ? void 0 : _a.call(this)) === true;
+        };
+        const resetSingleTouchMeasurementGesture = () => {
+            this._pendingSingleTouchMeasurementGesture = false;
+            this._singleTouchStartPosition.set(0, 0);
+        };
         const onPointerDown = (event) => {
             if (!this._enabled || !this._domElement)
                 return;
@@ -726,6 +744,22 @@ class CameraControls extends EventDispatcher {
             this._domElement.ownerDocument.addEventListener('pointermove', onPointerMove, { passive: false });
             this._domElement.ownerDocument.addEventListener('pointerup', onPointerUp);
             this._isDragging = true;
+            if (this._pendingSingleTouchMeasurementGesture &&
+                event.pointerType === 'touch' &&
+                this._activePointers.length > 1) {
+                // 第二根手指介入后立即退出待决态，恢复原有多指控制行为。
+                resetSingleTouchMeasurementGesture();
+            }
+            if (shouldDeferSingleTouchMeasurementGesture(event)) {
+                // 单指轻点先进入待决态，只有越过阈值才真正开始控制相机。
+                this._getClientRect(this._elementRect);
+                this._singleTouchStartPosition.set(event.clientX, event.clientY);
+                dragStartPosition.copy(this._singleTouchStartPosition);
+                lastDragPosition.copy(this._singleTouchStartPosition);
+                this._state = ACTION.NONE;
+                this._pendingSingleTouchMeasurementGesture = true;
+                return;
+            }
             startDragging(event);
         };
         const onPointerMove = (event) => {
@@ -739,6 +773,16 @@ class CameraControls extends EventDispatcher {
             pointer.clientY = event.clientY;
             pointer.deltaX = event.movementX;
             pointer.deltaY = event.movementY;
+            if (this._pendingSingleTouchMeasurementGesture && event.pointerType === 'touch') {
+                const distance = this._singleTouchStartPosition.distanceTo(new THREE.Vector2(event.clientX, event.clientY));
+                if (distance < this.touchTapThreshold) {
+                    return;
+                }
+                // 越过阈值后，从当前位置重新建立拖拽基准，避免相机瞬间跳变。
+                resetSingleTouchMeasurementGesture();
+                startDragging(event);
+                return;
+            }
             this._state = 0;
             if (event.pointerType === 'touch') {
                 switch (this._activePointers.length) {
@@ -768,6 +812,19 @@ class CameraControls extends EventDispatcher {
             dragging();
         };
         const onPointerUp = (event) => {
+            if (this._pendingSingleTouchMeasurementGesture && event.pointerType === 'touch') {
+                const pointer = this._findPointerById(event.pointerId);
+                pointer && this._disposePointer(pointer);
+                resetSingleTouchMeasurementGesture();
+                this._state = ACTION.NONE;
+                this._dragNeedsUpdate = false;
+                if (this._activePointers.length === 0) {
+                    this._isDragging = false;
+                    this._domElement.ownerDocument.removeEventListener('pointermove', onPointerMove, { passive: false });
+                    this._domElement.ownerDocument.removeEventListener('pointerup', onPointerUp);
+                }
+                return;
+            }
             const pointer = this._findPointerById(event.pointerId);
             if (pointer && pointer === this._lockedPointer)
                 return;
@@ -1162,10 +1219,11 @@ class CameraControls extends EventDispatcher {
             this._domElement.ownerDocument.removeEventListener('pointerlockerror', onPointerLockError);
         };
         this.cancel = () => {
-            if (this._state === ACTION.NONE)
+            if (this._state === ACTION.NONE && !this._pendingSingleTouchMeasurementGesture)
                 return;
             this._state = ACTION.NONE;
             this._activePointers.length = 0;
+            resetSingleTouchMeasurementGesture();
             endDragging();
         };
         // if (domElement)

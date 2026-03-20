@@ -329,6 +329,11 @@ export class Viewer extends EventDispatcher{
 		this.measuringTool = new MeasuringTool(this);
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);
+		// 仅在启用 cameraControls 且测量插入激活时，才让单指轻点优先走测量。
+		this.cameraControls.touchTapThreshold = 8;
+		this.cameraControls.shouldCaptureSingleTouch = () => {
+			return this.controls === this.cameraControls && !!this.measuringTool?.eventMeasurement;
+		};
 		this.treeTagTool = new TreeTagTool(this);
 		this.rectangleSVGTool = new RectangleSVGTool(this);
 		this.polygonSVGTool = new PolygonSVGTool(this);

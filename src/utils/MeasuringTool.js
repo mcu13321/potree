@@ -160,16 +160,12 @@ export class MeasuringTool extends EventDispatcher{
 
 		this.mouseDownPosition = null;
 		this.viewer.renderer.domElement.addEventListener('mousedown', (e) => {
-			this.mouseDownPosition = {
-				x: e.clientX,
-				y: e.clientY
-			};
+			// 统一记录为画布本地坐标，保证鼠标与触摸分支共用同一判定逻辑。
+			this.mouseDownPosition = this.viewer.inputHandler.getEventLocalPosition(e);
 		});
 		this.viewer.renderer.domElement.addEventListener('touchstart', (e) => {
-			this.mouseDownPosition = {
-				x: e.touches[0].clientX,
-				y: e.touches[0].clientY
-			};
+			// 统一记录为画布本地坐标，避免混用原始触摸坐标。
+			this.mouseDownPosition = this.viewer.inputHandler.getEventLocalPosition(e);
 		});
 
 
@@ -186,11 +182,25 @@ export class MeasuringTool extends EventDispatcher{
 		}, false);
 		this.viewer.renderer.domElement.addEventListener('touchend', (e) => {
 			if (this.eventMeasurement && this.eventMeasurement.maxMarkers > 1) {
-				e.clientX = e.changedTouches[0].clientX;
-				e.clientY = e.changedTouches[0].clientY;
+				// 触摸结束时以抬手位置重新计算悬停点，避免沿用旧命中结果。
+				let localPosition = this.viewer.inputHandler.getEventLocalPosition(e);
+				if(localPosition){
+					this.viewer.inputHandler.refreshHoveredPoint(localPosition);
+				}
 				this.eventMeasurement?.insertionCallback?.(e);
 			}
 		});
+	}
+
+	// 统一从事件中提取画布本地坐标，供测量插点和拖拽共用。
+	getEventLocalPosition(event){
+		return this.viewer.inputHandler.getEventLocalPosition(event);
+	}
+
+	// 统一复用 InputHandler 的轻点判定，避免不同模块阈值不一致。
+	isTapEvent(event, endPosition){
+		let pointerType = event.type.startsWith("touch") ? "touch" : "mouse";
+		return this.viewer.inputHandler.isTapGesture(pointerType, this.mouseDownPosition, endPosition);
 	}
 
 	setActiveMeasurement(measurement){
@@ -267,12 +277,9 @@ export class MeasuringTool extends EventDispatcher{
 		};
 		
 		let insertionCallback = (e) => {
-			if (this.mouseDownPosition) {
-				const distance = Math.sqrt(
-					Math.pow(e.clientX - this.mouseDownPosition.x, 2) + 
-					Math.pow(e.clientY - this.mouseDownPosition.y, 2)
-				);
-				const hasMoved = distance > 1;
+			let endPosition = this.getEventLocalPosition(e);
+			if (this.mouseDownPosition && endPosition) {
+				const hasMoved = !this.isTapEvent(e, endPosition);
 				let hoveredPoint = this.viewer.inputHandler.hoveredPoint;
 				let isAreaPlaneClick = this.eventMeasurement && this.eventMeasurement.name === 'area' && this.eventMeasurement.points.length >= 4;
 				

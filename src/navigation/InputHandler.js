@@ -41,6 +41,10 @@ export class InputHandler extends EventDispatcher {
 		this.isMeasurementEdit = false;
 		this.measurementReadonly = false;
 		this.hoveredPoint = null;
+		// 鼠标点击容差使用更小像素阈值，避免误判拖拽。
+		this.mouseTapThresholdPx = 2;
+		// 触摸点击容差适当放宽，吸收移动端硬件抖动。
+		this.touchTapThresholdPx = 8;
 
 		if (this.domElement.tabIndex === -1) {
 			this.domElement.tabIndex = 2222;
@@ -83,18 +87,86 @@ export class InputHandler extends EventDispatcher {
 		});
 	}
 
+	// 统一将屏幕坐标转换为相对渲染画布的本地坐标。
+	getLocalPositionFromClient(clientX, clientY){
+		let rect = this.domElement.getBoundingClientRect();
+		return new THREE.Vector2(
+			clientX - rect.left,
+			clientY - rect.top,
+		);
+	}
+
+	// 统一提取触摸点的本地坐标，避免混用 page/client 坐标系。
+	getLocalPositionFromTouch(touch){
+		if(!touch){
+			return null;
+		}
+
+		return this.getLocalPositionFromClient(touch.clientX, touch.clientY);
+	}
+
+	// 从鼠标、触摸或 changedTouches 中提取本地坐标，供各分支复用。
+	getEventLocalPosition(event){
+		if(!event){
+			return null;
+		}
+
+		if(event.changedTouches && event.changedTouches.length > 0){
+			return this.getLocalPositionFromTouch(event.changedTouches[0]);
+		}
+
+		if(event.touches && event.touches.length > 0){
+			return this.getLocalPositionFromTouch(event.touches[0]);
+		}
+
+		if(typeof event.clientX === "number" && typeof event.clientY === "number"){
+			return this.getLocalPositionFromClient(event.clientX, event.clientY);
+		}
+
+		return null;
+	}
+
+	// 使用统一入口刷新当前鼠标位置，确保触摸与鼠标分支一致。
+	updateMouseFromEvent(event){
+		let localPosition = this.getEventLocalPosition(event);
+		if(localPosition){
+			this.mouse.copy(localPosition);
+		}
+
+		return localPosition;
+	}
+
+	// 以当前本地坐标重新计算悬停点，保证 touchend 以抬手位置为准。
+	refreshHoveredPoint(mouse = this.mouse){
+		if(mouse){
+			this.mouse.copy(mouse);
+		}
+
+		this.hoveredPoint = this.getMousePointCloudIntersection(this.mouse);
+		return this.hoveredPoint;
+	}
+
+	// 统一获取不同输入设备的点击容差，避免各处硬编码不同阈值。
+	getTapThreshold(pointerType = "mouse"){
+		return pointerType === "touch" ? this.touchTapThresholdPx : this.mouseTapThresholdPx;
+	}
+
+	// 统一按像素距离判断轻点手势，不再依赖归一化位移必须等于 0。
+	isTapGesture(pointerType = "mouse", start = this.drag?.start, end = this.drag?.end){
+		if(!start || !end){
+			return false;
+		}
+
+		return start.distanceTo(end) <= this.getTapThreshold(pointerType);
+	}
+
 	onTouchStart (e) {
 		if (this.logMessages) console.log(this.constructor.name + ': onTouchStart');
 
 		e.preventDefault();
 
 		if (e.touches.length === 1) {
-			let rect = this.domElement.getBoundingClientRect();
-			let x = e.touches[0].pageX - rect.left;
-			let y = e.touches[0].pageY - rect.top;
-			this.mouse.set(x, y);
-
-			// this.startDragging(null);
+			this.updateMouseFromEvent(e);
 		}
 
 		
@@ -106,7 +178,7 @@ export class InputHandler extends EventDispatcher {
 			});
 		}
 
-		this.hoveredPoint = this.getMousePointCloudIntersection(this.mouse);
+		this.refreshHoveredPoint(this.mouse);
 			
 		if (!this.drag) {
 			this.hoveredElements = this.getHoveredElements(true);
@@ -133,14 +205,14 @@ export class InputHandler extends EventDispatcher {
 	onTouchEnd (e) {
 		if (this.logMessages) console.log(this.constructor.name + ': onTouchEnd');
 
-		if (this.isMeasurementEdit) {
-			this.isMeasurementEdit = false;
-			this.startDragging(null);
-			this.viewer.controls.enabled = true;
-			this.drag = null;
-		}
-
 		e.preventDefault();
+
+		let localPosition = this.updateMouseFromEvent(e);
+		if(localPosition && this.drag){
+			this.drag.lastDrag.copy(localPosition.clone().sub(this.drag.end));
+			this.drag.end.copy(localPosition);
+		}
+		this.refreshHoveredPoint(this.mouse);
 
 		for (let inputListener of this.getSortedListeners()) {
 			inputListener.dispatchEvent({
@@ -159,8 +231,7 @@ export class InputHandler extends EventDispatcher {
 		}
 
 		if (this.drag && this.drag.object && this.hoveredPoint) {
-			this.drag.end = {x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY}
-			let noMovement = this.getNormalizedDrag().length() === 0;
+			let noMovement = this.isTapGesture("touch");
 			if (noMovement) {
 				this.drag.object.dispatchEvent({
 					type: 'drop',
@@ -170,6 +241,13 @@ export class InputHandler extends EventDispatcher {
 				this.drag = null;
 			}
 		}
+
+		if (this.isMeasurementEdit) {
+			this.isMeasurementEdit = false;
+			this.startDragging(null);
+			this.viewer.controls.enabled = true;
+			this.drag = null;
+		}
 	}
 
 	onTouchMove (e) {
@@ -178,27 +256,21 @@ export class InputHandler extends EventDispatcher {
 		e.preventDefault();
 
 		if (e.touches.length === 1) {
-			let rect = this.domElement.getBoundingClientRect();
-			let x = e.touches[0].pageX - rect.left;
-			let y = e.touches[0].pageY - rect.top;
-			this.mouse.set(x, y);
+			let localPosition = this.updateMouseFromEvent(e);
 
-			if (this.drag && this.isMeasurementEdit) {
+			if (this.drag && this.isMeasurementEdit && localPosition) {
+				this.drag.lastDrag.copy(localPosition.clone().sub(this.drag.end));
+				this.drag.end.copy(localPosition);
 
-			this.drag.lastDrag.x = x - this.drag.end.x;
-			this.drag.lastDrag.y = y - this.drag.end.y;
-
-			this.drag.end.set(x, y);
-
-			if (this.drag.object) {
-				if (this.logMessages) console.log(this.constructor.name + ': drag: ' + this.drag.object.name);
-				this.drag.object.dispatchEvent({
-					type: 'drag',
-					drag: this.drag,
-					viewer: this.viewer
-				});
+				if (this.drag.object) {
+					if (this.logMessages) console.log(this.constructor.name + ': drag: ' + this.drag.object.name);
+					this.drag.object.dispatchEvent({
+						type: 'drag',
+						drag: this.drag,
+						viewer: this.viewer
+					});
+				}
 			}
-		}
 
 		}
 
@@ -365,7 +437,7 @@ export class InputHandler extends EventDispatcher {
 		}
 		e.preventDefault();
 
-		let noMovement = this.getNormalizedDrag().length() === 0;
+		let noMovement = this.isTapGesture("mouse");
 		
 		let consumed = false;
 		let consume = () => { return consumed = true; };
@@ -426,7 +498,6 @@ export class InputHandler extends EventDispatcher {
 					consume: consume,
 				});
 			}
-			console.log('this.viewer.inputHandler.endDragging');
 			if (noMovement  && e.button === THREE.MOUSE.LEFT) {
 				this.drag = null;
 			}
@@ -613,7 +684,7 @@ export class InputHandler extends EventDispatcher {
 
 	getMousePointCloudIntersection (mouse) {
 		return Utils.getMousePointCloudIntersection(
-			this.mouse, 
+			mouse, 
 			this.scene.getActiveCamera(), 
 			this.viewer, 
 			this.scene.pointclouds);
