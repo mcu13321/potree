@@ -123,13 +123,25 @@ export class Scene extends EventDispatcher{
 		return box;
 	}
 
+	getBoundingBox4One(pointcloud){
+		let box = new THREE.Box3();
+		this.scenePointCloud.updateMatrixWorld(true);
+		this.referenceFrame.updateMatrixWorld(true);
+		pointcloud.updateMatrixWorld(true);
+		let pointcloudBox = pointcloud.pcoGeometry.tightBoundingBox ? pointcloud.pcoGeometry.tightBoundingBox : pointcloud.boundingBox;
+		let boxWorld = Utils.computeTransformedBoundingBox(pointcloudBox, pointcloud.matrixWorld);
+		box.union(boxWorld);
+
+		return box;
+	}
+
 	addPointCloud (pointcloud, translateToCenter = true) {
 		this.pointclouds.push(pointcloud);
 		this.scenePointCloud.add(pointcloud);
 		
 		if (translateToCenter) {
 			const oldPosition = pointcloud.position.clone();
-			const size = this.getBoundingBox().getSize();
+			const size = this.getBoundingBox4One(pointcloud).getSize();
 			pointcloud.position.x = - size.x / 2
 			pointcloud.position.y = - size.y / 2
 			pointcloud.position.z = 0
