@@ -1233,6 +1233,14 @@ export class Renderer {
 			shader.setUniform1f("fov", Math.PI * camera.fov / 180);
 			shader.setUniform1f("near", camera.near);
 			shader.setUniform1f("far", camera.far);
+
+			{
+				const camPos = material.uniforms.cameraPosition.value;
+				shader.setUniform3f("cameraPosition", [camPos.x, camPos.y, camPos.z]);
+				shader.setUniform1f("uNear", material.uniforms.uNear.value);
+				shader.setUniform1f("uFar", material.uniforms.uFar.value);
+				shader.setUniform1i("uXrayUseDistanceRamp", material.uniforms.uXrayUseDistanceRamp.value);
+			}
 			
 			if(camera instanceof THREE.OrthographicCamera){
 				shader.setUniform("uUseOrthographicCamera", true);

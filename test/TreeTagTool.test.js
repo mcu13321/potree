@@ -72,6 +72,41 @@ function cleanupViewer(viewer) {
 	}
 }
 
+/** 模拟一次无拖拽的 pointer 点击（pointerdown 于 target，pointerup 同目标并冒泡至 document） */
+function dispatchPointerTap(target, options = {}) {
+	const {
+		clientX = 100,
+		clientY = 100,
+		ctrlKey = false,
+		metaKey = false,
+		pointerId = 1,
+	} = options;
+	const downInit = {
+		bubbles: true,
+		button: 0,
+		buttons: 1,
+		clientX,
+		clientY,
+		ctrlKey,
+		metaKey,
+		pointerId,
+		pointerType: "mouse",
+	};
+	const upInit = {
+		bubbles: true,
+		button: 0,
+		buttons: 0,
+		clientX,
+		clientY,
+		ctrlKey,
+		metaKey,
+		pointerId,
+		pointerType: "mouse",
+	};
+	target.dispatchEvent(new PointerEvent("pointerdown", downInit));
+	target.dispatchEvent(new PointerEvent("pointerup", upInit));
+}
+
 describe("TreeTagTool", () => {
 	let viewer;
 	let tool;
@@ -133,12 +168,46 @@ describe("TreeTagTool", () => {
 		tool.update();
 
 		const tag = tool.tags.get(pc1);
-		tag.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, clientX: 100, clientY: 100 })
-		);
+		dispatchPointerTap(tag.domElement, { clientX: 100, clientY: 100 });
 
 		expect(pc1.userData.xrayEnabled).toBe(false);
-		expect(tool.highlightedPointclouds).toContain(pc1);
+		expect(tool.highlightedKeys).toContain("pc1");
+		expect(tool.getHighlightedPointclouds()).toContain(pc1);
+	});
+
+	it("拖拽超过阈值时不应触发选中", () => {
+		const pc1 = createMockPointcloud("pc1");
+		const pc2 = createMockPointcloud("pc2");
+		viewer.scene.addPointCloud(pc1);
+		viewer.scene.addPointCloud(pc2);
+		tool.update();
+
+		const canvas = viewer.renderer.domElement;
+		const pid = 1;
+		canvas.dispatchEvent(
+			new PointerEvent("pointerdown", {
+				bubbles: true,
+				button: 0,
+				buttons: 1,
+				clientX: 100,
+				clientY: 100,
+				pointerId: pid,
+				pointerType: "mouse",
+			})
+		);
+		canvas.dispatchEvent(
+			new PointerEvent("pointerup", {
+				bubbles: true,
+				button: 0,
+				buttons: 0,
+				clientX: 116,
+				clientY: 100,
+				pointerId: pid,
+				pointerType: "mouse",
+			})
+		);
+
+		expect(tool.highlightedKeys.length).toBe(0);
 	});
 
 	it("单选时点击已选中的唯一点云应取消选中", () => {
@@ -149,16 +218,12 @@ describe("TreeTagTool", () => {
 		tool.update();
 
 		const tag = tool.tags.get(pc1);
-		tag.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: false })
-		);
-		expect(tool.highlightedPointclouds).toContain(pc1);
+		dispatchPointerTap(tag.domElement, { ctrlKey: false });
+		expect(tool.highlightedKeys).toContain("pc1");
 
-		tag.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: false })
-		);
-		expect(tool.highlightedPointclouds).not.toContain(pc1);
-		expect(tool.highlightedPointclouds.length).toBe(0);
+		dispatchPointerTap(tag.domElement, { ctrlKey: false });
+		expect(tool.highlightedKeys).not.toContain("pc1");
+		expect(tool.highlightedKeys.length).toBe(0);
 		expect(pc1.userData.xrayEnabled).toBe(false);
 	});
 
@@ -172,22 +237,16 @@ describe("TreeTagTool", () => {
 		const tag1 = tool.tags.get(pc1);
 		const tag2 = tool.tags.get(pc2);
 
-		tag1.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: true })
-		);
-		expect(tool.highlightedPointclouds.length).toBe(1);
-		expect(tool.highlightedPointclouds).toContain(pc1);
+		dispatchPointerTap(tag1.domElement, { ctrlKey: true });
+		expect(tool.highlightedKeys.length).toBe(1);
+		expect(tool.highlightedKeys).toContain("pc1");
 
-		tag2.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: true })
-		);
-		expect(tool.highlightedPointclouds.length).toBe(2);
+		dispatchPointerTap(tag2.domElement, { ctrlKey: true });
+		expect(tool.highlightedKeys.length).toBe(2);
 
-		tag1.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: true })
-		);
-		expect(tool.highlightedPointclouds.length).toBe(1);
-		expect(tool.highlightedPointclouds).toContain(pc2);
+		dispatchPointerTap(tag1.domElement, { ctrlKey: true });
+		expect(tool.highlightedKeys.length).toBe(1);
+		expect(tool.highlightedKeys).toContain("pc2");
 	});
 
 	it("有选中时未选中的点云 xrayEnabled 应为 true", () => {
@@ -198,9 +257,7 @@ describe("TreeTagTool", () => {
 		tool.update();
 
 		const tag1 = tool.tags.get(pc1);
-		tag1.domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: false })
-		);
+		dispatchPointerTap(tag1.domElement, { ctrlKey: false });
 
 		expect(pc1.userData.xrayEnabled).toBe(false);
 		expect(pc2.userData.xrayEnabled).toBe(true);
@@ -291,11 +348,10 @@ describe("TreeTagTool", () => {
 		const handler = vi.fn();
 		viewer.scene.addEventListener("tree_tag_highlight_changed", handler);
 
-		tool.tags.get(pc1).domElement.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, ctrlKey: false })
-		);
+		dispatchPointerTap(tool.tags.get(pc1).domElement, { ctrlKey: false });
 
 		expect(handler).toHaveBeenCalled();
+		expect(handler.mock.calls[0][0].highlightedKeys).toContain("pc1");
 		expect(handler.mock.calls[0][0].highlightedPointclouds).toContain(pc1);
 		expect(handler.mock.calls[0][0].scene).toBe(viewer.scene);
 

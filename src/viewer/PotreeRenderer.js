@@ -74,6 +74,9 @@ export class PotreeRenderer {
 			const {material} = pointcloud;
 			material.useEDL = false;
 		}
+
+		const visiblePointCloudCount = this.viewer.scene.pointclouds.filter(pc => pc.visible).length;
+		const xrayUseDistanceRamp = visiblePointCloudCount > 1 ? 0 : 1;
 		
 		for(const pointcloud of this.viewer.scene.pointclouds){
 			const {material} = pointcloud;
@@ -99,6 +102,7 @@ export class PotreeRenderer {
 				material.cameraPosition = camera.position;
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
+				material.uXrayUseDistanceRamp = xrayUseDistanceRamp;
 			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;

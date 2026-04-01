@@ -979,14 +979,21 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setTopView4CameraControls(animation = true){
-		let box = this.getBoundingBox(this.scene.pointclouds);
+		const visiblePointclouds = this.scene.pointclouds.filter(
+			(pc) => pc.visible !== false
+		);
+		const pointcloudsForBox =
+			visiblePointclouds.length > 0 ? visiblePointclouds : this.scene.pointclouds;
+		let box = this.getBoundingBox(pointcloudsForBox );
 		if (this.cameraControls.camera.isPerspectiveCamera) {
 			this.cameraControls.camera.zoom = 1;
 		} 
 		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
 		this.cameraControls.normalizeRotations().reset(animation)
 		this.cameraControls.fitToBox(box, animation);
-		this.cameraControls.rotateTo(0, 0, animation);
+		// 单点云：沿用原俯视（沿 -Z）；多点云：初始视角沿世界 -Y（侧向）
+		const polarAngle = visiblePointclouds.length > 1 ? Math.PI / 2 : 0;
+		this.cameraControls.rotateTo(0, polarAngle, animation);
 	};
 
 	setFromR3fCameraControls(){

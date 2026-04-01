@@ -115,6 +115,7 @@ export class HQSplatRenderer{
 		this.resize(width, height);
 
 		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
+		const xrayUseDistanceRamp = visiblePointClouds.length > 1 ? 0 : 1;
 		const originalMaterials = new Map();
 
 		for(let pointcloud of visiblePointClouds){
@@ -148,6 +149,7 @@ export class HQSplatRenderer{
 					attributeMaterial.cameraPosition = camera.position;
 					attributeMaterial.uNear = nearestDistance;
 					attributeMaterial.uFar = farthestDistance;
+					attributeMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
 				}
 
 				this.attributeMaterials.set(pointcloud, attributeMaterial);
@@ -159,6 +161,7 @@ export class HQSplatRenderer{
 					attributeMaterial.cameraPosition = camera.position;
 					attributeMaterial.uNear = nearestDistance;
 					attributeMaterial.uFar = farthestDistance;
+					attributeMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
 				}
 			}
 
@@ -166,6 +169,12 @@ export class HQSplatRenderer{
 				let depthMaterial = new PointCloudMaterial();
 				depthMaterial.useXRAY = enabled;
 				depthMaterial.opacity = enabled ? opacity : 1.0;
+				if(enabled){
+					depthMaterial.cameraPosition = camera.position;
+					depthMaterial.uNear = nearestDistance;
+					depthMaterial.uFar = farthestDistance;
+					depthMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+				}
 
 				depthMaterial.setDefine("depth_pass", "#define hq_depth_pass");
 				depthMaterial.setDefine("use_edl", "#define use_edl");
@@ -175,6 +184,12 @@ export class HQSplatRenderer{
 				const depthMaterial = this.depthMaterials.get(pointcloud);
 				depthMaterial.useXRAY = enabled;
 				depthMaterial.opacity = enabled ? opacity : 1.0;
+				if(enabled){
+					depthMaterial.cameraPosition = camera.position;
+					depthMaterial.uNear = nearestDistance;
+					depthMaterial.uFar = farthestDistance;
+					depthMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+				}
 			}
 		}
 

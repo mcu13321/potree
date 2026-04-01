@@ -13,6 +13,7 @@ uniform mat4 uProjInv;
 uniform vec3 cameraPosition;
 uniform float uNear;
 uniform float uFar;
+uniform int uXrayUseDistanceRamp;
 
 
 uniform mat4 projectionMatrix;
@@ -101,9 +102,11 @@ void main() {
 	#endif
 
 	#if defined(use_xray)
-		// float alpha = clamp((vDistance - 10.) / (100. - 10.), 0.1, 0.11);
-		float alpha = clamp((vDistance - uNear) / (uFar - uNear), 0.0, 0.1);
-		gl_FragColor.a = alpha;
+		if (uXrayUseDistanceRamp == 1) {
+			gl_FragColor.a = clamp((vDistance - uNear) / (uFar - uNear), 0.0, 0.1);
+		} else {
+			gl_FragColor.a = 0.01;
+		}
 	#endif
 }
 

@@ -3,6 +3,9 @@ import { TreeTag } from "./TreeTag.js";
 import { Utils } from "../utils.js";
 import { EventDispatcher } from "../EventDispatcher.js";
 
+/** 按下与松开之间位移超过该值（像素）则视为拖拽（如旋转相机），不触发选中 */
+const POINTER_DRAG_THRESHOLD_PX = 5;
+
 export class TreeTagTool extends EventDispatcher {
 	constructor(viewer) {
 		super();
@@ -10,12 +13,19 @@ export class TreeTagTool extends EventDispatcher {
 		this.viewer = viewer;
 		this.renderer = viewer.renderer;
 		this.tags = new Map(); // pointcloud -> TreeTag
-		this.highlightedPointclouds = []; // 高亮的点云数组，空表示全部高亮
+		/** 当前高亮对应的身份键，优先为 `pointcloud.userData.key`，缺省时为 `pointcloud.name`。空数组表示无选中（全部高亮） */
+		this.highlightedKeys = [];
+
+		this._pointerActiveId = null;
+		this._pointerDownX = 0;
+		this._pointerDownY = 0;
 
 		this._onPointcloudAdded = (e) => this._onPointcloudAddedOrVisibilityChanged(e.pointcloud);
 		this._onVisibilityChanged = (e) => this._onPointcloudAddedOrVisibilityChanged(e.pointcloud);
 		this._onSceneChange = (e) => this._handleSceneChange(e);
-		this._onClick = (e) => this._handleClick(e);
+		this._onPointerDown = (e) => this._handlePointerDown(e);
+		this._onPointerUpDocument = (e) => this._handlePointerUpDocument(e);
+		this._onPointerCancelDocument = (e) => this._handlePointerCancelDocument(e);
 		this._onUpdate = () => this.update();
 
 		// 初始同步：为已有点云绑定 visibility_changed，并执行 _syncTags
@@ -30,8 +40,53 @@ export class TreeTagTool extends EventDispatcher {
 
 		const renderArea = this._getRenderArea();
 		if (renderArea) {
-			renderArea.addEventListener("click", this._onClick);
+			renderArea.addEventListener("pointerdown", this._onPointerDown);
 		}
+	}
+
+	_clearPointerDocumentListeners() {
+		document.removeEventListener("pointerup", this._onPointerUpDocument);
+		document.removeEventListener("pointercancel", this._onPointerCancelDocument);
+	}
+
+	_handlePointerDown(e) {
+		if (e.button !== 0) {
+			return;
+		}
+		this._pointerActiveId = e.pointerId;
+		this._pointerDownX = e.clientX;
+		this._pointerDownY = e.clientY;
+		document.addEventListener("pointerup", this._onPointerUpDocument);
+		document.addEventListener("pointercancel", this._onPointerCancelDocument);
+	}
+
+	_handlePointerUpDocument(e) {
+		if (this._pointerActiveId === null || e.pointerId !== this._pointerActiveId) {
+			return;
+		}
+		this._clearPointerDocumentListeners();
+		this._pointerActiveId = null;
+
+		if (e.button !== 0) {
+			return;
+		}
+
+		const dx = e.clientX - this._pointerDownX;
+		const dy = e.clientY - this._pointerDownY;
+		const th = POINTER_DRAG_THRESHOLD_PX;
+		if (dx * dx + dy * dy > th * th) {
+			return;
+		}
+
+		this._handleClick(e);
+	}
+
+	_handlePointerCancelDocument(e) {
+		if (this._pointerActiveId === null || e.pointerId !== this._pointerActiveId) {
+			return;
+		}
+		this._clearPointerDocumentListeners();
+		this._pointerActiveId = null;
 	}
 
 	_getRenderArea() {
@@ -43,6 +98,28 @@ export class TreeTagTool extends EventDispatcher {
 		return this.viewer.scene.pointclouds.filter(
 			(pc) => pc.visible !== false
 		);
+	}
+
+	/**
+	 * 与标签、选中一致的身份键：优先 `userData.key`，否则 `name`（与无 key 时 TreeTag 展示回退一致）
+	 * @param {Object} pointcloud
+	 * @returns {string|number}
+	 */
+	_highlightIdentityKey(pointcloud) {
+		const k = pointcloud?.userData?.key;
+		if (k !== undefined && k !== null) {
+			return k;
+		}
+		return pointcloud?.name ?? "";
+	}
+
+	_findPointcloudByHighlightKey(key) {
+		for (const pc of this.viewer.scene.pointclouds) {
+			if (this._highlightIdentityKey(pc) === key) {
+				return pc;
+			}
+		}
+		return null;
 	}
 
 	_bindVisibilityChanged(pointcloud) {
@@ -70,7 +147,7 @@ export class TreeTagTool extends EventDispatcher {
 
 		if (visible.length < 2) {
 			// 移除所有 tag，清空高亮状态
-			this.highlightedPointclouds = [];
+			this.highlightedKeys = [];
 			for (const pc of [...this.tags.keys()]) {
 				this._removeTagForPointcloud(pc);
 			}
@@ -85,7 +162,7 @@ export class TreeTagTool extends EventDispatcher {
 			}
 		}
 
-		// 仅为尚未有 tag 的可见点云添加 tag，index 按可见顺序 1,2,3...
+		// 仅为尚未有 tag 的可见点云添加 tag；文案优先 `userData.key`，否则为可见顺序 1,2,3…
 		visible.forEach((pc, i) => {
 			if (this.tags.has(pc)) return;
 			const tag = new TreeTag(pc, i + 1);
@@ -104,9 +181,8 @@ export class TreeTagTool extends EventDispatcher {
 		if (tag) {
 			tag.dispose();
 			this.tags.delete(pointcloud);
-			this.highlightedPointclouds = this.highlightedPointclouds.filter(
-				(p) => p !== pointcloud
-			);
+			const idKey = this._highlightIdentityKey(pointcloud);
+			this.highlightedKeys = this.highlightedKeys.filter((k) => k !== idKey);
 		}
 	}
 
@@ -186,34 +262,30 @@ export class TreeTagTool extends EventDispatcher {
 	}
 
 	/**
-	 * 应用选择规则并更新 highlightedPointclouds
+	 * 应用选择规则并更新 highlightedKeys
 	 * @param {Object} pointcloud - 被点击的点云
 	 * @param {boolean} ctrlKey - 是否 Ctrl 多选
 	 */
 	_applySelection(pointcloud, ctrlKey) {
+		const key = this._highlightIdentityKey(pointcloud);
 		if (ctrlKey) {
 			// Ctrl + 点击：切换多选
-			const idx = this.highlightedPointclouds.indexOf(pointcloud);
+			const idx = this.highlightedKeys.indexOf(key);
 			if (idx >= 0) {
-				this.highlightedPointclouds = this.highlightedPointclouds.filter(
-					(p) => p !== pointcloud
-				);
+				this.highlightedKeys = this.highlightedKeys.filter((k) => k !== key);
 			} else {
-				this.highlightedPointclouds = [
-					...this.highlightedPointclouds,
-					pointcloud,
-				];
+				this.highlightedKeys = [...this.highlightedKeys, key];
 			}
 		} else {
 			// 非 Ctrl：单选
 			if (
-				this.highlightedPointclouds.length === 1 &&
-				this.highlightedPointclouds[0] === pointcloud
+				this.highlightedKeys.length === 1 &&
+				this.highlightedKeys[0] === key
 			) {
 				// 已是唯一选中，取消选中
-				this.highlightedPointclouds = [];
+				this.highlightedKeys = [];
 			} else {
-				this.highlightedPointclouds = [pointcloud];
+				this.highlightedKeys = [key];
 			}
 		}
 
@@ -221,8 +293,8 @@ export class TreeTagTool extends EventDispatcher {
 	}
 
 	_applyXRAYStates() {
-		const highlighted = this.highlightedPointclouds;
-		const hasSelection = highlighted.length > 0;
+		const highlightedKeys = this.highlightedKeys;
+		const hasSelection = highlightedKeys.length > 0;
 
 		if (this.tags.size === 0) {
 			// 无 tag 时，所有点云高亮
@@ -233,7 +305,9 @@ export class TreeTagTool extends EventDispatcher {
 		} else {
 			for (const [pointcloud, tag] of this.tags) {
 				if (!pointcloud.userData) pointcloud.userData = {};
-				const isHighlighted = !hasSelection || highlighted.includes(pointcloud);
+				const idKey = this._highlightIdentityKey(pointcloud);
+				const isHighlighted =
+					!hasSelection || highlightedKeys.includes(idKey);
 				pointcloud.userData.xrayEnabled = !isHighlighted;
 				tag.updateStyle(isHighlighted);
 			}
@@ -241,7 +315,8 @@ export class TreeTagTool extends EventDispatcher {
 
 		this.viewer.scene.dispatchEvent({
 			type: "tree_tag_highlight_changed",
-			highlightedPointclouds: [...this.highlightedPointclouds],
+			highlightedKeys: [...this.highlightedKeys],
+			highlightedPointclouds: this.getHighlightedPointclouds(),
 			scene: this.viewer.scene,
 		});
 	}
@@ -283,33 +358,47 @@ export class TreeTagTool extends EventDispatcher {
 			const y = Math.round((-screenPos.y + 1) * clientHeight / 2);
 
 			domElement.style.display = "flex";
-			domElement.style.left = `${x - 15}px`;
-			domElement.style.top = `${y - 15}px`;
+			domElement.style.left = `${x - 12}px`;
+			domElement.style.top = `${y - 12}px`;
 		}
 	}
 
 	/**
-	 * 获取当前高亮的点云数组。空数组表示全部高亮（无选中）。
+	 * 获取当前高亮对应的身份键（优先 `userData.key`，否则 `name`）。空数组表示无选中（全部高亮）。
 	 */
-	getHighlightedPointclouds() {
-		return [...this.highlightedPointclouds];
+	getHighlightedKeys() {
+		return [...this.highlightedKeys];
 	}
 
 	/**
-	 * 供外部修改高亮状态时调用。更新内部数组并同步到 userData 与 tag 样式。
-	 * @param {Object[]} pointclouds - 要高亮的点云数组；空数组表示全部高亮（无选中）
+	 * 根据当前高亮键解析出的点云对象数组（顺序与键一致）。
 	 */
-	setHighlightedPointclouds(pointclouds) {
-		this.highlightedPointclouds = Array.isArray(pointclouds)
-			? [...pointclouds]
-			: [];
+	getHighlightedPointclouds() {
+		return this.highlightedKeys
+			.map((k) => this._findPointcloudByHighlightKey(k))
+			.filter(Boolean);
+	}
+
+	/**
+	 * 供外部修改高亮状态时调用。更新内部键列表并同步到 userData 与 tag 样式。
+	 * @param {Array<string|number|Object>} items - 可为 `userData.key` 同类型的键，或点云对象（将按 `userData.key` / `name` 换算）
+	 */
+	setHighlightedPointclouds(items) {
+		if (!Array.isArray(items)) {
+			this.highlightedKeys = [];
+		} else {
+			this.highlightedKeys = items.map(v => Number(v));
+		}
 		this._applyXRAYStates();
 	}
 
 	dispose() {
+		this._clearPointerDocumentListeners();
+		this._pointerActiveId = null;
+
 		const renderArea = this._getRenderArea();
 		if (renderArea) {
-			renderArea.removeEventListener("click", this._onClick);
+			renderArea.removeEventListener("pointerdown", this._onPointerDown);
 		}
 
 		this.viewer.removeEventListener("update", this._onUpdate);
@@ -324,6 +413,6 @@ export class TreeTagTool extends EventDispatcher {
 			tag.dispose();
 		}
 		this.tags.clear();
-		this.highlightedPointclouds = [];
+		this.highlightedKeys = [];
 	}
 }

@@ -154,6 +154,7 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 			cameraPosition: { type: "3fv", value: new THREE.Vector3() },
 			uNear: { type: "f", value: 0.1 },
 			uFar: { type: "f", value: 1.0},
+			uXrayUseDistanceRamp: { type: "i", value: 1 },
 			densityFactor: { type: "f", value: 2.0 },
 		};
 
@@ -640,6 +641,15 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 	set uFar(value){
 		if (!this.uniforms.uFar.value !== value) {
 			this.uniforms.uFar.value = value;
+		}
+	}
+
+	get uXrayUseDistanceRamp(){
+		return this.uniforms.uXrayUseDistanceRamp.value;
+	}
+	set uXrayUseDistanceRamp(value){
+		if (this.uniforms.uXrayUseDistanceRamp.value !== value) {
+			this.uniforms.uXrayUseDistanceRamp.value = value;
 		}
 	}
 
