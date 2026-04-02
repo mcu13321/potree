@@ -1,4 +1,6 @@
 
+import {getPointcloudEffectState} from "./PointcloudEffectUtils.js";
+
 
 function createPointcloudData(pointcloud) {
 
@@ -27,6 +29,7 @@ function createPointcloudData(pointcloud) {
 	}
 
 	let pointSizeTypeName = Object.entries(Potree.PointSizeType).find(e => e[1] === material.pointSizeType)[0];
+	const effectState = getPointcloudEffectState(pointcloud, true);
 
 	let jsonMaterial = {
 		activeAttributeName: material.activeAttributeName,
@@ -44,6 +47,10 @@ function createPointcloudData(pointcloud) {
 		rotation: pointcloud.rotation.toArray(),
 		scale: pointcloud.scale.toArray(),
 		material: jsonMaterial,
+		// 点云效果状态需要随项目一起持久化，保证重新加载后视觉一致。
+		edlEnabled: effectState.edlEnabled,
+		xrayEnabled: effectState.xrayEnabled,
+		xrayOpacity: effectState.userData.xrayOpacity,
 	};
 
 	return pcdata;

@@ -59,7 +59,7 @@ export class PointCloudSM{
 		this.target.setSize(width, height);
 	}
 
-	render(scene, camera){
+	render(scene, camera, params = {}){
 
 		this.threeRenderer.setClearColor(0x000000, 1);
 		
@@ -68,7 +68,8 @@ export class PointCloudSM{
 		this.threeRenderer.setRenderTarget(this.target);
 		this.threeRenderer.clear(true, true, true);
 
-		this.potreeRenderer.render(scene, this.camera, this.target, {});
+		// 阴影贴图同样支持点云子集渲染，避免混合效果时错误采样其它点云。
+		this.potreeRenderer.render(scene, this.camera, this.target, params);
 
 		this.threeRenderer.setRenderTarget(oldTarget);
 	}

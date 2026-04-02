@@ -1460,10 +1460,17 @@ export class Renderer {
 		// camera.matrixWorldInverse.invert(camera.matrixWorld);
 
 		const traversalResult = this.traverse(scene);
+		let octrees = traversalResult.octrees;
+
+		if (Array.isArray(params.pointclouds)) {
+			// 支持按点云子集渲染，避免多 pass 时通过改 visible 污染场景状态。
+			const pointcloudSet = new Set(params.pointclouds);
+			octrees = octrees.filter((octree) => pointcloudSet.has(octree));
+		}
 
 
 		// RENDER
-		for (const octree of traversalResult.octrees) {
+		for (const octree of octrees) {
 			let nodes = octree.visibleNodes;
 			this.renderOctree(octree, nodes, camera, target, params);
 		}

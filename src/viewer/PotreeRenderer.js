@@ -1,5 +1,6 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
+import {getPointcloudEffectState} from "./PointcloudEffectUtils.js";
 
 
 export class PotreeRenderer {
@@ -75,16 +76,15 @@ export class PotreeRenderer {
 			material.useEDL = false;
 		}
 
-		const visiblePointCloudCount = this.viewer.scene.pointclouds.filter(pc => pc.visible).length;
+		const visiblePointClouds = this.viewer.scene.pointclouds.filter(pc => pc.visible);
+		const visiblePointCloudCount = visiblePointClouds.length;
 		const xrayUseDistanceRamp = visiblePointCloudCount > 1 ? 0 : 1;
 		
 		for(const pointcloud of this.viewer.scene.pointclouds){
 			const {material} = pointcloud;
-			const enabled = Boolean(pointcloud.userData?.xrayEnabled);
-			let opacity = pointcloud.userData?.xrayOpacity;
-			if(typeof opacity !== "number" || Number.isNaN(opacity)){
-				opacity = 0.5;
-			}
+			const effectState = getPointcloudEffectState(pointcloud, viewer.isEDLSupported());
+			const enabled = effectState.xrayEnabled;
+			const opacity = effectState.xrayOpacity;
 
 			if(enabled){
 				const bbox = this.viewer.scene.getBoundingBox([pointcloud]);
@@ -111,6 +111,10 @@ export class PotreeRenderer {
 		
 		viewer.pRenderer.render(viewer.scene.scenePointCloud, camera, null, {
 			clipSpheres: viewer.scene.volumes.filter(v => (v instanceof Potree.SphereVolume)),
+			// 标准渲染器仅负责非 EDL 点云；EDL 点云会在专用渲染器中单独处理。
+			pointclouds: visiblePointClouds.filter((pointcloud) => {
+				return !getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).edlEnabled;
+			}),
 		});
 		
 		// render scene

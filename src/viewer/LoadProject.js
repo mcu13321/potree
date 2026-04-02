@@ -5,6 +5,11 @@ import {Measure} from "../utils/Measure.js";
 import {CameraAnimation} from "../modules/CameraAnimation/CameraAnimation.js";
 import {Utils} from "../utils.js";
 import {PointSizeType} from "../defines.js";
+import {
+	clearPointcloudEffects,
+	setPointcloudEDLEnabled,
+	setPointcloudXRAYEnabled,
+} from "./PointcloudEffectUtils.js";
 
 function loadPointCloud(viewer, data){
 
@@ -72,6 +77,20 @@ function loadPointCloud(viewer, data){
 			pointcloud.scale.set(...data.scale);
 
 			loadMaterial(pointcloud.material);
+			// 新旧项目都走这里恢复点云效果；旧项目没有字段时交给 viewer 默认值兜底。
+			if (data.edlEnabled !== undefined || data.xrayEnabled !== undefined) {
+				clearPointcloudEffects(pointcloud);
+				if (data.edlEnabled !== undefined) {
+					setPointcloudEDLEnabled(pointcloud, data.edlEnabled, viewer.isEDLSupported());
+				}
+				if (data.xrayEnabled !== undefined && !data.edlEnabled) {
+					setPointcloudXRAYEnabled(pointcloud, data.xrayEnabled);
+				}
+			}
+
+			if (data.xrayOpacity !== undefined) {
+				pointcloud.userData.xrayOpacity = data.xrayOpacity;
+			}
 
 			viewer.scene.addPointCloud(pointcloud);
 

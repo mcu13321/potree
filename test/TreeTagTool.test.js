@@ -53,7 +53,7 @@ class MockScene extends EventDispatcher {
 }
 
 class MockViewer extends EventDispatcher {
-	constructor(scene = new MockScene()) {
+	constructor(scene = new MockScene(), edlSupported = true) {
 		super();
 		this.scene = scene;
 		this.renderArea = document.createElement("div");
@@ -61,6 +61,7 @@ class MockViewer extends EventDispatcher {
 			domElement: document.createElement("canvas"),
 			getSize: vi.fn((target) => target.set(800, 600)),
 		};
+		this.isEDLSupported = vi.fn(() => edlSupported);
 		this.renderArea.appendChild(this.renderer.domElement);
 		document.body.appendChild(this.renderArea);
 	}
@@ -72,7 +73,7 @@ function cleanupViewer(viewer) {
 	}
 }
 
-/** 模拟一次无拖拽的 pointer 点击（pointerdown 于 target，pointerup 同目标并冒泡至 document） */
+/** 模拟一次无拖拽的 pointer 点击。 */
 function dispatchPointerTap(target, options = {}) {
 	const {
 		clientX = 100,
@@ -105,6 +106,11 @@ function dispatchPointerTap(target, options = {}) {
 	};
 	target.dispatchEvent(new PointerEvent("pointerdown", downInit));
 	target.dispatchEvent(new PointerEvent("pointerup", upInit));
+}
+
+function expectEffectState(pointcloud, { edlEnabled, xrayEnabled }) {
+	expect(pointcloud.userData.edlEnabled).toBe(edlEnabled);
+	expect(pointcloud.userData.xrayEnabled).toBe(xrayEnabled);
 }
 
 describe("TreeTagTool", () => {
@@ -142,11 +148,12 @@ describe("TreeTagTool", () => {
 		expect(viewer.renderArea.contains(tag1.domElement)).toBe(true);
 		expect(viewer.renderArea.contains(tag2.domElement)).toBe(true);
 
-		tool.dispose();
-		cleanupViewer(viewer);
+		// 默认无选中时，多个点云都应进入 EDL 高亮态。
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
-	it("收到 pointcloud_added 且已有多个可见点云时应添加标签且不重复", () => {
+	it("收到 pointcloud_added 且已存在多个可见点云时应补齐标签且不重复添加", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc1);
@@ -160,7 +167,7 @@ describe("TreeTagTool", () => {
 		expect(viewer.renderArea.querySelectorAll("div").length).toBe(2);
 	});
 
-	it("点击 tag 时应更新选择状态", () => {
+	it("点击 tag 时应将选中点云切为 EDL，未选中点云切为 XRAY", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc1);
@@ -170,9 +177,10 @@ describe("TreeTagTool", () => {
 		const tag = tool.tags.get(pc1);
 		dispatchPointerTap(tag.domElement, { clientX: 100, clientY: 100 });
 
-		expect(pc1.userData.xrayEnabled).toBe(false);
 		expect(tool.highlightedKeys).toContain("pc1");
 		expect(tool.getHighlightedPointclouds()).toContain(pc1);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: true });
 	});
 
 	it("拖拽超过阈值时不应触发选中", () => {
@@ -208,9 +216,12 @@ describe("TreeTagTool", () => {
 		);
 
 		expect(tool.highlightedKeys.length).toBe(0);
+		// 未发生选中变更时，应保持默认“全部 EDL”状态。
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
-	it("单选时点击已选中的唯一点云应取消选中", () => {
+	it("单选时点击已选中的唯一点云应取消选中并恢复全部 EDL", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc1);
@@ -222,9 +233,9 @@ describe("TreeTagTool", () => {
 		expect(tool.highlightedKeys).toContain("pc1");
 
 		dispatchPointerTap(tag.domElement, { ctrlKey: false });
-		expect(tool.highlightedKeys).not.toContain("pc1");
 		expect(tool.highlightedKeys.length).toBe(0);
-		expect(pc1.userData.xrayEnabled).toBe(false);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
 	it("Ctrl+点击应切换多选", () => {
@@ -238,29 +249,17 @@ describe("TreeTagTool", () => {
 		const tag2 = tool.tags.get(pc2);
 
 		dispatchPointerTap(tag1.domElement, { ctrlKey: true });
-		expect(tool.highlightedKeys.length).toBe(1);
-		expect(tool.highlightedKeys).toContain("pc1");
+		expect(tool.highlightedKeys).toEqual(["pc1"]);
 
 		dispatchPointerTap(tag2.domElement, { ctrlKey: true });
 		expect(tool.highlightedKeys.length).toBe(2);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 
 		dispatchPointerTap(tag1.domElement, { ctrlKey: true });
-		expect(tool.highlightedKeys.length).toBe(1);
-		expect(tool.highlightedKeys).toContain("pc2");
-	});
-
-	it("有选中时未选中的点云 xrayEnabled 应为 true", () => {
-		const pc1 = createMockPointcloud("pc1");
-		const pc2 = createMockPointcloud("pc2");
-		viewer.scene.addPointCloud(pc1);
-		viewer.scene.addPointCloud(pc2);
-		tool.update();
-
-		const tag1 = tool.tags.get(pc1);
-		dispatchPointerTap(tag1.domElement, { ctrlKey: false });
-
-		expect(pc1.userData.xrayEnabled).toBe(false);
-		expect(pc2.userData.xrayEnabled).toBe(true);
+		expect(tool.highlightedKeys).toEqual(["pc2"]);
+		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: true });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
 	it("场景切换后应解除旧场景监听并绑定新场景", () => {
@@ -277,7 +276,6 @@ describe("TreeTagTool", () => {
 		expect(tool.tags.has(oldPc1)).toBe(true);
 		expect(tool.tags.has(oldPc2)).toBe(true);
 
-		// 模拟 viewer.setScene：先更新 scene 再派发事件
 		viewer.scene = newScene;
 		viewer.dispatchEvent({
 			type: "scene_changed",
@@ -292,9 +290,7 @@ describe("TreeTagTool", () => {
 		newScene.addPointCloud(newPc2);
 		expect(tool.tags.has(newPc1)).toBe(true);
 		expect(tool.tags.has(newPc2)).toBe(true);
-		expect(viewer.renderArea.contains(tool.tags.get(newPc1).domElement)).toBe(
-			true
-		);
+		expect(viewer.renderArea.contains(tool.tags.get(newPc1).domElement)).toBe(true);
 	});
 
 	it("dispose 应清理所有标签和监听", () => {
@@ -312,7 +308,7 @@ describe("TreeTagTool", () => {
 		expect(viewer.renderArea.contains(tag.domElement)).toBe(false);
 	});
 
-	it("visibility_changed 时可见点云数小于2应移除所有标签", () => {
+	it("visibility_changed 后可见点云数小于 2 时应移除标签并清空效果", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc1);
@@ -323,9 +319,11 @@ describe("TreeTagTool", () => {
 		pc2.visible = false;
 
 		expect(tool.tags.size).toBe(0);
+		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: false });
 	});
 
-	it("setHighlightedPointclouds 应更新高亮状态并同步到 userData", () => {
+	it("setHighlightedPointclouds 应支持传点云对象并同步效果", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc1);
@@ -335,8 +333,24 @@ describe("TreeTagTool", () => {
 
 		expect(tool.getHighlightedPointclouds()).toContain(pc1);
 		expect(tool.getHighlightedPointclouds().length).toBe(1);
-		expect(pc1.userData.xrayEnabled).toBe(false);
-		expect(pc2.userData.xrayEnabled).toBe(true);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: true });
+	});
+
+	it("setHighlightedPointclouds 传字符串数组时应保持字符串语义，不再转数字", () => {
+		const pc1 = createMockPointcloud("pc1");
+		const pc2 = createMockPointcloud("pc2");
+		pc1.userData.key = 101;
+		pc2.userData.key = 202;
+		viewer.scene.addPointCloud(pc1);
+		viewer.scene.addPointCloud(pc2);
+
+		tool.setHighlightedPointclouds(["101"]);
+
+		expect(tool.highlightedKeys).toEqual(["101"]);
+		expect(tool.getHighlightedPointclouds()).toEqual([pc1]);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: true });
 	});
 
 	it("内部高亮改变时应派发 tree_tag_highlight_changed 事件", () => {
@@ -356,5 +370,21 @@ describe("TreeTagTool", () => {
 		expect(handler.mock.calls[0][0].scene).toBe(viewer.scene);
 
 		viewer.scene.removeEventListener("tree_tag_highlight_changed", handler);
+	});
+
+	it("无 EDL 能力时应回退到旧的 XRAY 高亮逻辑", () => {
+		cleanupViewer(viewer);
+		viewer = new MockViewer(new MockScene(), false);
+		tool = new TreeTagTool(viewer);
+
+		const pc1 = createMockPointcloud("pc1");
+		const pc2 = createMockPointcloud("pc2");
+		viewer.scene.addPointCloud(pc1);
+		viewer.scene.addPointCloud(pc2);
+
+		dispatchPointerTap(tool.tags.get(pc1).domElement, { ctrlKey: false });
+
+		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: true });
 	});
 });

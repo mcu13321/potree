@@ -609,8 +609,14 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 	}
 
 	set useEDL (value) {
-		if (this._useEDL !== value) {
-			this._useEDL = value;
+		const nextValue = Boolean(value);
+
+		if (this._useEDL !== nextValue) {
+			// 材质层同样保持 EDL 与 XRAY 互斥，避免 shader define 冲突。
+			this._useEDL = nextValue;
+			if (nextValue) {
+				this._useXRAY = false;
+			}
 			this.updateShaderSource();
 		}
 	}
@@ -620,8 +626,14 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 	}
 
 	set useXRAY (value) {
-		if (this._useXRAY !== value) {
-			this._useXRAY = value;
+		const nextValue = Boolean(value);
+
+		if (this._useXRAY !== nextValue) {
+			// 材质层同样保持 XRAY 与 EDL 互斥，避免 shader define 冲突。
+			this._useXRAY = nextValue;
+			if (nextValue) {
+				this._useEDL = false;
+			}
 			this.updateShaderSource();
 		}
 	}

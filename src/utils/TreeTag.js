@@ -40,8 +40,8 @@ export class TreeTag {
 	}
 
 	/**
-	 * 根据是否高亮更新标签样式
-	 * @param {boolean} highlighted - 是否高亮（xrayEnabled=false）
+	 * 根据是否高亮更新标签样式。
+	 * @param {boolean} highlighted - 是否高亮（高亮点云对应 EDL 选中态）
 	 */
 	updateStyle(highlighted) {
 		if (this.domElement) {

@@ -23,6 +23,15 @@ import {VolumeTool} from "../utils/VolumeTool.js";
 import {TreeTagTool} from "../utils/TreeTagTool.js";
 import {RectangleSVGTool} from "../utils/RectangleSVGTool.js";
 import {PolygonSVGTool} from "../utils/PolygonSVGTool.js";
+import {
+	applyViewerEffectDefaults,
+	areAllPointcloudsEDLEnabled,
+	clearPointcloudEffects,
+	getPointcloudEffectState,
+	hasVisibleEDLEffect,
+	setPointcloudEDLEnabled,
+	setPointcloudXRAYEnabled,
+} from "./PointcloudEffectUtils.js";
 
 import {InputHandler} from "../navigation/InputHandler.js";
 import {NavigationCube} from "./NavigationCube.js";
@@ -139,7 +148,11 @@ export class Viewer extends EventDispatcher{
 		this.edlStrength = 1.0;
 		this.edlRadius = 1.4;
 		this.edlOpacity = 1.0;
-		this.useEDL = false;
+		// 记录批量接口的默认效果，供后续新加载点云继承。
+		this._pointcloudEffectDefaults = {
+			edlEnabled: false,
+			xrayEnabled: false,
+		};
 		this.description = "";
 
 		this.classifications = ClassificationScheme.DEFAULT;
@@ -268,6 +281,9 @@ export class Viewer extends EventDispatcher{
 			this.clippingTool.setScene(this.scene);
 			
 			let onPointcloudAdded = (e) => {
+				// 新点云加入场景时，需要立即补齐默认效果状态。
+				this.applyPointcloudEffectDefaults(e.pointcloud);
+
 				if (this.scene.pointclouds.length === 1) {
 					let speed = e.pointcloud.boundingBox.getSize(new THREE.Vector3()).length();
 					speed = speed / 5;
@@ -631,32 +647,81 @@ export class Viewer extends EventDispatcher{
 		return this.useDEMCollisions;
 	};
 
-	setEDLEnabled (value) {
-		value = Boolean(value) && Features.SHADER_EDL.isSupported();
+	isEDLSupported () {
+		return Boolean(Features?.SHADER_EDL?.isSupported?.());
+	};
 
-		if (this.useEDL !== value) {
-			this.useEDL = value;
+	getPointcloudEffectState (pointcloud) {
+		return getPointcloudEffectState(pointcloud, this.isEDLSupported());
+	};
+
+	setPointcloudEDLEnabled (pointcloud, value) {
+		return setPointcloudEDLEnabled(pointcloud, value, this.isEDLSupported());
+	};
+
+	setPointcloudXRAYEnabled (pointcloud, value) {
+		return setPointcloudXRAYEnabled(pointcloud, value);
+	};
+
+	clearPointcloudEffects (pointcloud) {
+		return clearPointcloudEffects(pointcloud);
+	};
+
+	applyPointcloudEffectDefaults (pointcloud) {
+		return applyViewerEffectDefaults(this, pointcloud, this.isEDLSupported());
+	};
+
+	hasVisibleEDLEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
+		return hasVisibleEDLEffect(pointclouds, this.isEDLSupported());
+	};
+
+	setEDLEnabled (value) {
+		const previousValue = this.getEDLEnabled();
+		const nextValue = Boolean(value) && this.isEDLSupported();
+
+		this._pointcloudEffectDefaults.edlEnabled = nextValue;
+		if (nextValue) {
+			this._pointcloudEffectDefaults.xrayEnabled = false;
+		}
+
+		if (this.scene) {
+			for (const pointcloud of this.scene.pointclouds) {
+				this.setPointcloudEDLEnabled(pointcloud, nextValue);
+			}
+		}
+
+		if (previousValue !== this.getEDLEnabled()) {
 			this.dispatchEvent({'type': 'use_edl_changed', 'viewer': this});
 		}
 	};
 
 	setXRAYEnabled (value) {
-		value = Boolean(value);
+		const previousValue = this.getEDLEnabled();
+		const nextValue = Boolean(value);
 
-		if(!this.scene){
-			return;
+		this._pointcloudEffectDefaults.xrayEnabled = nextValue;
+		if (nextValue) {
+			this._pointcloudEffectDefaults.edlEnabled = false;
 		}
 
-		for(const pointcloud of this.scene.pointclouds){
-			if(!pointcloud.userData){
-				pointcloud.userData = {};
+		if (this.scene) {
+			for (const pointcloud of this.scene.pointclouds) {
+				this.setPointcloudXRAYEnabled(pointcloud, nextValue);
 			}
-			pointcloud.userData.xrayEnabled = value;
+		}
+
+		if (previousValue !== this.getEDLEnabled()) {
+			this.dispatchEvent({'type': 'use_edl_changed', 'viewer': this});
 		}
 	};
 
 	getEDLEnabled () {
-		return this.useEDL;
+		const pointclouds = this.scene?.pointclouds ?? [];
+		if (pointclouds.length === 0) {
+			return Boolean(this._pointcloudEffectDefaults.edlEnabled);
+		}
+
+		return areAllPointcloudsEDLEnabled(pointclouds, this.isEDLSupported());
 	};
 
 	setEDLRadius (value) {
@@ -1971,15 +2036,16 @@ export class Viewer extends EventDispatcher{
 	}
 
 	getPRenderer(){
+		const hasVisibleEDL = this.hasVisibleEDLEffectPointclouds();
+
 		if(this.useHQ){
 			if (!this.hqRenderer) {
 				this.hqRenderer = new HQSplatRenderer(this);
 			}
-			this.hqRenderer.useEDL = this.useEDL;
 
 			return this.hqRenderer;
 		}else{
-			if (this.useEDL && Features.SHADER_EDL.isSupported()) {
+			if (hasVisibleEDL) {
 				if (!this.edlRenderer) {
 					this.edlRenderer = new EDLRenderer(this);
 				}
@@ -2098,8 +2164,10 @@ export class Viewer extends EventDispatcher{
 		for(let pointcloud of this.scene.pointclouds){
 
 			let viewport = xrCameras.cameras[0].viewport;
+			const effectState = this.getPointcloudEffectState(pointcloud);
 
 			pointcloud.material.useEDL = false;
+			pointcloud.material.useXRAY = effectState.xrayEnabled;
 			pointcloud.screenHeight = viewport.height;
 			pointcloud.screenWidth = viewport.width;
 
@@ -2131,7 +2199,10 @@ export class Viewer extends EventDispatcher{
 
 			for(let pointcloud of this.scene.pointclouds){
 				const {material} = pointcloud;
+				const effectState = this.getPointcloudEffectState(pointcloud);
+
 				material.useEDL = false;
+				material.useXRAY = effectState.xrayEnabled;
 			}
 
 			let vrWorld = view.clone().invert();
