@@ -310,6 +310,30 @@ a:hover, a:visited, a:link, a:active{
 	opacity:	0.5;
 }
 
+/* 测量 HTML 标签直接挂到 renderArea，下层于交互面板、上层于 WebGL 画布。 */
+.potree-measurement-label{
+	position: absolute;
+	pointer-events: none;
+	z-index: 80;
+	display: none;
+	padding: 4px 8px;
+	border: 1px solid rgba(255, 255, 255, 0.92);
+	border-radius: 6px;
+	background: rgba(46, 130, 255, 0.92);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+	color: #ffffff;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.2;
+	white-space: nowrap;
+	will-change: left, top;
+}
+
+/* 高差标签默认靠右显示，避免压在线段正中央。 */
+.potree-measurement-label--height{
+	transform: translate(0, -50%) !important;
+}
+
 
 canvas { 
 	width: 100%; 

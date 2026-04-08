@@ -1,11 +1,20 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {TextSprite} from "../TextSprite.js";
+import {MeasureHtmlLabel} from "./MeasureHtmlLabel.js";
 import {Utils} from "../utils.js";
 import {Line2} from "../../libs/three.js/lines/Line2.js";
 import {LineGeometry} from "../../libs/three.js/lines/LineGeometry.js";
 import {LineMaterial} from "../../libs/three.js/lines/LineMaterial.js";
 import { Circle } from '../../libs/konva/lib/shapes/Circle.js';
+
+// 统一创建测量 HTML 标签，避免各类标签重复配置默认行为。
+function createMeasureLabel(options = {}){
+	const label = new MeasureHtmlLabel("", options);
+	label.visible = false;
+
+	return label;
+}
+
 function createHeightLine(){
 	let lineGeometry = new LineGeometry();
 
@@ -29,23 +38,43 @@ function createHeightLine(){
 	return heightEdge;
 }
 
-function createHeightLabel(viewer){
-	const heightLabel = new TextSprite('', viewer, 120, 10);
-	heightLabel.visible = false;
-	return heightLabel;
+function createHeightLabel(){
+	return createMeasureLabel({
+		className: "potree-measurement-label--height",
+		offsetX: 72,
+		offsetY: -6,
+	});
 }
 
-function createAreaLabel(viewer){
-	const areaLabel = new TextSprite('', viewer);
-	areaLabel.visible = false;
-	return areaLabel;
+function createEdgeLabel(){
+	return createMeasureLabel({
+		offsetY: -10,
+	});
 }
 
-function createCircleRadiusLabel(viewer){
-	const circleRadiusLabel = new TextSprite("", viewer);
-	circleRadiusLabel.visible = false;
-	
-	return circleRadiusLabel;
+function createCoordinateLabel(){
+	return createMeasureLabel({
+		offsetY: -14,
+	});
+}
+
+function createAngleLabel(){
+	return createMeasureLabel({
+		// 角度标签采用屏幕空间避让：以标签中心为锚，基于标签实际尺寸把它推到顶点外侧。
+		anchorMode: "center",
+		markerRadiusPx: 8,
+		minGapPx: 12,
+		offsetY: 0,
+		radialOffset: 0,
+	});
+}
+
+function createAreaLabel(){
+	return createMeasureLabel();
+}
+
+function createCircleRadiusLabel(){
+	return createMeasureLabel();
 }
 
 function createCircleRadiusLine(){
@@ -218,7 +247,7 @@ function createAzimuth(viewer){
 	const sm = new THREE.MeshNormalMaterial();
 
 	{
-		const label = new TextSprite("", viewer);
+		const label = createMeasureLabel();
 		azimuth.label = label;
 	}
 
@@ -278,9 +307,9 @@ export class Measure extends THREE.Object3D {
 		this.coordinateLabels = [];
 
 		this.heightEdge = createHeightLine();
-		this.heightLabel = createHeightLabel(this.viewer);
-		this.areaLabel = createAreaLabel(this.viewer);
-		this.circleRadiusLabel = createCircleRadiusLabel(this.viewer);
+		this.heightLabel = createHeightLabel();
+		this.areaLabel = createAreaLabel();
+		this.circleRadiusLabel = createCircleRadiusLabel();
 		this.circleRadiusLine = createCircleRadiusLine();
 		this.circleLine = createCircleLine();
 		this.circleCenter = createCircleCenter();
@@ -392,19 +421,19 @@ export class Measure extends THREE.Object3D {
 		}
 
 		{ // edge labels
-			let edgeLabel = new TextSprite('', this.viewer);
+			let edgeLabel = createEdgeLabel();
 			this.edgeLabels.push(edgeLabel);
 			this.textsGroup.add(edgeLabel);
 		}
 
 		{ // coordinate labels
-			let coordinateLabel = new TextSprite('', this.viewer);
+			let coordinateLabel = createCoordinateLabel();
 			this.coordinateLabels.push(coordinateLabel);
 			this.textsGroup.add(coordinateLabel);
 		}
 
 		{ // angle labels
-			let angleLabel = new TextSprite('', this.viewer);
+			let angleLabel = createAngleLabel();
 			this.angleLabels.push(angleLabel);
 			this.textsGroup.add(angleLabel);
 		}
@@ -565,6 +594,40 @@ export class Measure extends THREE.Object3D {
 		this.setMarker(this.points.length - 1, point);
 	};
 
+	// 汇总当前测量的所有 HTML 标签，供工具层统一挂载与更新。
+	getAllLabels () {
+		return [
+			...this.sphereLabels,
+			...this.edgeLabels,
+			...this.angleLabels,
+			...this.coordinateLabels,
+			this.heightLabel,
+			this.areaLabel,
+			this.circleRadiusLabel,
+			this.azimuth?.label,
+		].filter(Boolean);
+	}
+
+	// 删除单个标签时同时移除场景引用与 DOM，避免测量编辑后节点泄漏。
+	removeAndDisposeLabel (label) {
+		if (!label) {
+			return;
+		}
+
+		if (label.parent) {
+			label.parent.remove(label);
+		}
+
+		label.dispose?.();
+	}
+
+	// 测量整体删除时统一释放所有 HTML 标签 DOM。
+	disposeLabels () {
+		for (const label of this.getAllLabels()) {
+			label.dispose?.();
+		}
+	}
+
 	removeMarker (index) {
 		this.points.splice(index, 1);
 
@@ -574,11 +637,13 @@ export class Measure extends THREE.Object3D {
 		this.geometryGroup.remove(this.edges[edgeIndex]);
 		this.edges.splice(edgeIndex, 1);
 
-		this.textsGroup.remove(this.edgeLabels[edgeIndex]);
+		this.removeAndDisposeLabel(this.edgeLabels[edgeIndex]);
 		this.edgeLabels.splice(edgeIndex, 1);
+
+		this.removeAndDisposeLabel(this.coordinateLabels[index]);
 		this.coordinateLabels.splice(index, 1);
 		
-		this.textsGroup.remove(this.angleLabels[index]);
+		this.removeAndDisposeLabel(this.angleLabels[index]);
 		this.angleLabels.splice(index, 1);
 
 		this.spheres.splice(index, 1);
@@ -947,15 +1012,40 @@ export class Measure extends THREE.Object3D {
 				let angleLabel = this.angleLabels[i];
 				let angle = (allAngles.length > 0) ? allAngles[i] : this.getAngleBetweenLines(point, previousPoint, nextPoint);
 
-				let dir = nextPoint.position.clone().sub(previousPoint.position);
-				dir.multiplyScalar(0.5);
-				dir = previousPoint.position.clone().add(dir).sub(point.position).normalize();
+				// 使用角平分线并结合重心方向判断外侧，使三角形三个角标签都落在外部。
+				let previousDir = previousPoint.position.clone().sub(point.position);
+				let nextDir = nextPoint.position.clone().sub(point.position);
+				if (previousDir.lengthSq() > 0) {
+					previousDir.normalize();
+				}
+				if (nextDir.lengthSq() > 0) {
+					nextDir.normalize();
+				}
+
+				let bisectorDir = previousDir.add(nextDir);
+				let centroidDir = centroid.clone().sub(point.position);
+
+				if (bisectorDir.lengthSq() === 0) {
+					bisectorDir = centroidDir.clone();
+				}
+				if (bisectorDir.lengthSq() === 0) {
+					bisectorDir = new THREE.Vector3(0, 0, 1);
+				}
+
+				bisectorDir.normalize();
+				if (centroidDir.lengthSq() > 0) {
+					centroidDir.normalize();
+					if (bisectorDir.dot(centroidDir) > 0) {
+						bisectorDir.multiplyScalar(-1);
+					}
+				}
 
 				let dist = Math.min(point.position.distanceTo(previousPoint.position), point.position.distanceTo(nextPoint.position));
-				dist = dist / 9;
+				dist = dist / 4;
 
-				let labelPos = point.position.clone().add(dir.multiplyScalar(dist));
+				let labelPos = point.position.clone().add(bisectorDir.multiplyScalar(dist));
 				angleLabel.position.copy(labelPos);
+				angleLabel.setScreenAnchor(point.position, 18);
 
 				let angleDegree;
 				// 对于三角形，最后一个角度用180减去前两个角度，保证和为180

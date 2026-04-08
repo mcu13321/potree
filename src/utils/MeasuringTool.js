@@ -114,10 +114,6 @@ function updateAzimuth(viewer, measure){
 		azimuth.label.position.copy(labelPos);
 	}
 	azimuth.label.setText(txtDegrees);
-	let distance = azimuth.label.position.distanceTo(camera.position);
-	let pr = Utils.projectedRadius(1, camera, distance, width, height);
-	let scale = (70 / pr);
-	azimuth.label.scale.set(scale, scale, scale);
 }
 
 export class MeasuringTool extends EventDispatcher{
@@ -140,11 +136,20 @@ export class MeasuringTool extends EventDispatcher{
 		this.scene.add(this.light);
 		this.activeMeasurement = null;
 		this.eventMeasurement = null;
+		// 直接复用 renderArea 作为测量标签 HTML 的挂载根节点。
+		this.renderArea = this.getRenderAreaElement();
 		
 		this.viewer.inputHandler.registerInteractiveScene(this.scene);
 
-		this.onRemove = (e) => { this.scene.remove(e.measurement);};
-		this.onAdd = e => {this.scene.add(e.measurement);};
+		// 测量对象进入或离开场景时，同时同步管理其 DOM 标签生命周期。
+		this.onRemove = (e) => {
+			this.disposeMeasurementLabels(e.measurement);
+			this.scene.remove(e.measurement);
+		};
+		this.onAdd = e => {
+			this.scene.add(e.measurement);
+			this.syncMeasurementLabels(e.measurement);
+		};
 
 		for(let measurement of viewer.scene.measurements){
 			this.onAdd({measurement: measurement});
@@ -201,6 +206,73 @@ export class MeasuringTool extends EventDispatcher{
 	isTapEvent(event, endPosition){
 		let pointerType = event.type.startsWith("touch") ? "touch" : "mouse";
 		return this.viewer.inputHandler.isTapGesture(pointerType, this.mouseDownPosition, endPosition);
+	}
+
+	// 兼容真实 viewer 与测试 mock，统一解析 renderArea 根节点。
+	getRenderAreaElement(){
+		const renderArea = this.viewer.renderArea;
+		if (renderArea instanceof HTMLElement) {
+			return renderArea;
+		}
+		if (renderArea && renderArea[0] instanceof HTMLElement) {
+			return renderArea[0];
+		}
+
+		return this.viewer.renderer.domElement?.parentElement ?? null;
+	}
+
+	// 兼容真实 Measure 与测试 mock，统一收集当前测量持有的标签对象。
+	collectMeasurementLabels(measurement){
+		if (typeof measurement?.getAllLabels === "function") {
+			return measurement.getAllLabels();
+		}
+
+		return [
+			...(measurement?.sphereLabels ?? []),
+			...(measurement?.edgeLabels ?? []),
+			...(measurement?.angleLabels ?? []),
+			...(measurement?.coordinateLabels ?? []),
+			measurement?.heightLabel,
+			measurement?.areaLabel,
+			measurement?.circleRadiusLabel,
+			measurement?.azimuth?.label,
+		].filter(Boolean);
+	}
+
+	// 把尚未挂载的测量标签补挂到 renderArea，支持插点过程中的动态新增标签。
+	syncMeasurementLabels(measurement){
+		this.renderArea = this.getRenderAreaElement();
+		if (!this.renderArea) {
+			return;
+		}
+
+		for (const label of this.collectMeasurementLabels(measurement)) {
+			label.attach?.(this.renderArea);
+		}
+	}
+
+	// 测量删除时统一释放其 DOM 标签，避免 renderArea 中残留节点。
+	disposeMeasurementLabels(measurement){
+		if (typeof measurement?.disposeLabels === "function") {
+			measurement.disposeLabels();
+			return;
+		}
+
+		for (const label of this.collectMeasurementLabels(measurement)) {
+			label.dispose?.();
+		}
+	}
+
+	// 每帧根据相机位置刷新测量标签的屏幕投影结果。
+	updateMeasurementLabels(measurement, camera, clientWidth, clientHeight){
+		this.syncMeasurementLabels(measurement);
+
+		const measurementVisible = measurement?.visible !== false;
+		const globalVisible = this.showLabels && measurementVisible;
+
+		for (const label of this.collectMeasurementLabels(measurement)) {
+			label.updateScreenPosition?.(camera, clientWidth, clientHeight, globalVisible);
+		}
 	}
 
 	setActiveMeasurement(measurement){
@@ -413,8 +485,8 @@ export class MeasuringTool extends EventDispatcher{
 		let measurements = this.viewer.scene.measurements;
 
 		const renderAreaSize = this.renderer.getSize(new THREE.Vector2());
-		let clientWidth = renderAreaSize.width;
-		let clientHeight = renderAreaSize.height;
+		let clientWidth = renderAreaSize.width ?? renderAreaSize.x;
+		let clientHeight = renderAreaSize.height ?? renderAreaSize.y;
 
 		this.light.position.copy(camera.position);
 		const dpr = window.devicePixelRatio || 1;
@@ -424,6 +496,8 @@ export class MeasuringTool extends EventDispatcher{
 			measure.lengthUnit = this.viewer.lengthUnit;
 			measure.lengthUnitDisplay = this.viewer.lengthUnitDisplay;
 			measure.update();
+			// 在投影 HTML 标签前主动刷新矩阵，确保标签世界坐标可直接读取。
+			measure.updateMatrixWorld(true);
 
 			updateAzimuth(this.viewer, measure);
 			//TODO 移动端横屏与竖屏测量标记显示大小不一致，尚未找到原因，下方根据横屏或竖屏设置不同scaley为权宜之计
@@ -558,12 +632,7 @@ export class MeasuringTool extends EventDispatcher{
 			}
 
 			{ // radius label
-				let label = measure.circleRadiusLabel;
-				let distance = label.position.distanceTo(camera.position);
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-
-				let scale = (70 / pr);
-				label.scale.set(scale, scale, scale);
+				// HTML 标签固定为屏幕尺寸，这里不再执行 sprite 缩放。
 			}
 
 			{ // edges
@@ -592,9 +661,11 @@ export class MeasuringTool extends EventDispatcher{
 				];
 
 				for(const label of labels){
-					label.visible = false;
+					label.updateScreenPosition?.(camera, clientWidth, clientHeight, false);
 				}
 			} else {
+				const measurementVisible = measure?.visible !== false;
+				const globalVisible = this.showLabels && measurementVisible;
 				const labels = [
 					...measure.sphereLabels, 
 					...measure.edgeLabels, 
@@ -608,16 +679,19 @@ export class MeasuringTool extends EventDispatcher{
 					//TODO 移动端横屏与竖屏测量标记显示大小不一致，尚未找到原因，下方根据横屏或竖屏设置不同scaley为权宜之计
 					const scaleyOverlay = isMobile ?  window.innerHeight > window.innerWidth ? 0.8 : 1.8 : 1;
 					for(let label of labels){
-						label.sprite.scale.set(label.userData.scaleX * scaleyOverlay, label.userData.scaleY * scaleyOverlay, 1)
+						label.updateScreenPosition?.(camera, clientWidth, clientHeight, globalVisible);
 					}
 				} else {
 					const scaleyOverlay = isMobile ? window.innerHeight > window.innerWidth ? 0.55 : 1.2: 0.75;
 					const trueZoom = (camera.top - camera.bottom) / camera.zoom * scaleyOverlay;
 					for(let label of labels){
-						label.sprite.scale.set(label.userData.scaleX * trueZoom, label.userData.scaleY * trueZoom, 1);
+						label.updateScreenPosition?.(camera, clientWidth, clientHeight, globalVisible);
 					}
 				}
 			}
+
+			// 统一收口到 HTML 标签投影更新，补齐方位角等不在旧数组中的标签。
+			this.updateMeasurementLabels(measure, camera, clientWidth, clientHeight);
 		}
 	}
 
