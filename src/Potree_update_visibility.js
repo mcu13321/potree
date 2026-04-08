@@ -179,7 +179,12 @@ export function updateVisibility(pointclouds, camera, renderer){
 		visible = visible && !(numVisiblePoints + node.getNumPoints() > Potree.pointBudget);
 		visible = visible && !(numVisiblePointsInPointclouds.get(pointcloud) + node.getNumPoints() > pointcloud.pointBudget);
 		visible = visible && level < maxLevel;
-		visible = visible || node.getLevel() <= 2;
+		
+		// 如果 pointcloud.minimumAlwaysVisibleLevel 是整数，则使用它，否则使用 2
+		let minimumAlwaysVisibleLevel = Number.isInteger(pointcloud.minimumAlwaysVisibleLevel)
+		? pointcloud.minimumAlwaysVisibleLevel
+		: 2;
+		visible = visible || node.getLevel() <= minimumAlwaysVisibleLevel;
 
 		let clipBoxes = pointcloud.material.clipBoxes;
 		if(true && clipBoxes.length > 0){
