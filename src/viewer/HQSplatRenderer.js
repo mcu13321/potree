@@ -5,7 +5,7 @@ import {PointCloudMaterial} from "../materials/PointCloudMaterial.js";
 import {PointShape} from "../defines.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
-import {getPointcloudEffectState, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
 
 export class HQSplatRenderer{
 	
@@ -129,7 +129,12 @@ export class HQSplatRenderer{
 		this.clearTargets();
 	}
 
-	_prepareEffectMaterials(pointcloud, camera, visiblePointCloudCount, originalMaterials){
+	// 使用新的实现覆盖旧的数量判定逻辑，统一改为 sourceKind 驱动。
+	_prepareEffectMaterials(pointcloud, camera, isGroupSource, originalMaterials){
+		if (typeof isGroupSource !== "boolean") {
+			isGroupSource = isGroupPointcloudSource(this.viewer);
+		}
+
 		const effectState = getPointcloudEffectState(pointcloud, this.viewer.isEDLSupported());
 		const enabled = effectState.xrayEnabled;
 		const opacity = effectState.xrayOpacity;
@@ -138,6 +143,7 @@ export class HQSplatRenderer{
 
 		let nearestDistance = 0;
 		let farthestDistance = 0;
+		let multiXrayOpacity = 0.01;
 		if(enabled){
 			const bbox = this.viewer.scene.getBoundingBox([pointcloud]);
 			const center = new THREE.Vector3();
@@ -148,6 +154,7 @@ export class HQSplatRenderer{
 			const distanceToCenter = camera.position.distanceTo(center);
 			nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
 			farthestDistance = distanceToCenter + maxDimension / 2;
+			multiXrayOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
 		}
 
 		if(!this.attributeMaterials.has(pointcloud)){
@@ -161,7 +168,7 @@ export class HQSplatRenderer{
 
 		const attributeMaterial = this.attributeMaterials.get(pointcloud);
 		const depthMaterial = this.depthMaterials.get(pointcloud);
-		const xrayUseDistanceRamp = visiblePointCloudCount > 1 ? 0 : 1;
+		const xrayUseDistanceRamp = isGroupSource ? 0 : 1;
 
 		attributeMaterial.useXRAY = enabled;
 		attributeMaterial.opacity = enabled ? opacity : 1.0;
@@ -170,6 +177,7 @@ export class HQSplatRenderer{
 			attributeMaterial.uNear = nearestDistance;
 			attributeMaterial.uFar = farthestDistance;
 			attributeMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+			attributeMaterial.uXrayMultiOpacity = multiXrayOpacity;
 		}
 
 		depthMaterial.useEDL = effectState.edlEnabled;
@@ -180,6 +188,7 @@ export class HQSplatRenderer{
 			depthMaterial.uNear = nearestDistance;
 			depthMaterial.uFar = farthestDistance;
 			depthMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+			depthMaterial.uXrayMultiOpacity = multiXrayOpacity;
 		}
 	}
 
@@ -378,6 +387,7 @@ export class HQSplatRenderer{
 
 		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
 		const {edlPointclouds, regularPointclouds} = partitionPointcloudsByEDL(visiblePointClouds, viewer.isEDLSupported());
+		const isGroupSource = isGroupPointcloudSource(viewer);
 		const originalMaterials = new Map();
 
 		for(let pointcloud of visiblePointClouds){

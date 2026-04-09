@@ -27,8 +27,10 @@ import {
 	applyViewerEffectDefaults,
 	areAllPointcloudsEDLEnabled,
 	clearPointcloudEffects,
+	ensurePointcloudEffectUserData,
 	getPointcloudEffectState,
 	hasVisibleEDLEffect,
+	isGroupPointcloudSource,
 	setPointcloudEDLEnabled,
 	setPointcloudXRAYEnabled,
 } from "./PointcloudEffectUtils.js";
@@ -284,7 +286,19 @@ export class Viewer extends EventDispatcher{
 				// 新点云加入场景时，需要立即补齐默认效果状态。
 				this.applyPointcloudEffectDefaults(e.pointcloud);
 
-				if (this.scene.pointclouds.length === 1) {
+				// 初始化速度仅在单点云模式下使用新增点云的包围盒估算。
+				if (!isGroupPointcloudSource(this, e.pointcloud)) {
+					let speed = e.pointcloud.boundingBox.getSize(new THREE.Vector3()).length();
+					speed = speed / 5;
+					this.setMoveSpeed(speed);
+				}
+			};
+
+			// 使用新的实现覆盖旧的数量判定逻辑，初始化速度统一由 sourceKind 驱动。
+			onPointcloudAdded = (e) => {
+				this.applyPointcloudEffectDefaults(e.pointcloud);
+
+				if (!isGroupPointcloudSource(this, e.pointcloud)) {
 					let speed = e.pointcloud.boundingBox.getSize(new THREE.Vector3()).length();
 					speed = speed / 5;
 					this.setMoveSpeed(speed);
@@ -1056,9 +1070,16 @@ export class Viewer extends EventDispatcher{
 		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
 		this.cameraControls.normalizeRotations().reset(animation)
 		this.cameraControls.fitToBox(box, animation);
-		// 单点云：沿用原俯视（沿 -Z）；多点云：初始视角沿世界 -Y（侧向）
-		const polarAngle = visiblePointclouds.length > 1 ? Math.PI / 2 : 0;
-		this.cameraControls.rotateTo(0, polarAngle, animation);
+		this.cameraControls.rotateTo(0, 0, animation);
+
+		// 记录 top view 结束位姿下每个点云的基准距离，供多点云 XRAY 动态透明度使用。
+		const cameraPosition = this.cameraControls.getPosition(new THREE.Vector3(), true);
+		for (const pointcloud of pointcloudsForBox) {
+			const pointcloudBox = this.scene.getBoundingBox([pointcloud]);
+			const center = pointcloudBox.getCenter(new THREE.Vector3());
+			const userData = ensurePointcloudEffectUserData(pointcloud);
+			userData.xrayTopViewBaseDistance = cameraPosition.distanceTo(center);
+		}
 	};
 
 	setFromR3fCameraControls(){

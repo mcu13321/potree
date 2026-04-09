@@ -155,6 +155,7 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 			uNear: { type: "f", value: 0.1 },
 			uFar: { type: "f", value: 1.0},
 			uXrayUseDistanceRamp: { type: "i", value: 1 },
+			uXrayMultiOpacity: { type: "f", value: 0.01 },
 			densityFactor: { type: "f", value: 2.0 },
 		};
 
@@ -662,6 +663,15 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 	set uXrayUseDistanceRamp(value){
 		if (this.uniforms.uXrayUseDistanceRamp.value !== value) {
 			this.uniforms.uXrayUseDistanceRamp.value = value;
+		}
+	}
+
+	get uXrayMultiOpacity(){
+		return this.uniforms.uXrayMultiOpacity.value;
+	}
+	set uXrayMultiOpacity(value){
+		if (this.uniforms.uXrayMultiOpacity.value !== value) {
+			this.uniforms.uXrayMultiOpacity.value = value;
 		}
 	}
 

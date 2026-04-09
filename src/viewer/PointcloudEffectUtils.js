@@ -3,6 +3,38 @@
  * @param {Object} pointcloud
  * @returns {Object}
  */
+import * as THREE from "../../libs/three.js/build/three.module.js";
+
+/**
+ * 统一读取运行时注入的点云来源模式，避免各处重复处理优先级与兜底。
+ * @param {Object} viewer
+ * @param {Object} [pointcloud]
+ * @returns {"group" | "single"}
+ */
+export function resolvePointcloudSourceKind(viewer, pointcloud) {
+	const candidates = [viewer, viewer?.scene, pointcloud];
+
+	for (const candidate of candidates) {
+		const sourceKind = candidate?.treemindPointCloudSourceMode?.sourceKind;
+		if (sourceKind === "group" || sourceKind === "single") {
+			return sourceKind;
+		}
+	}
+
+	// 字段缺失或非法时统一按单点云模式处理，兼容历史运行时。
+	return "single";
+}
+
+/**
+ * 统一暴露多点云模式布尔值，便于渲染与工具逻辑直接消费。
+ * @param {Object} viewer
+ * @param {Object} [pointcloud]
+ * @returns {boolean}
+ */
+export function isGroupPointcloudSource(viewer, pointcloud) {
+	return resolvePointcloudSourceKind(viewer, pointcloud) === "group";
+}
+
 export function ensurePointcloudEffectUserData(pointcloud) {
 	if (!pointcloud.userData) {
 		pointcloud.userData = {};
@@ -85,6 +117,34 @@ export function setPointcloudXRAYEnabled(pointcloud, value) {
 	}
 
 	return normalizePointcloudEffectState(pointcloud, true);
+}
+
+
+/**
+ * 基于 top view 基准距离和层级限制计算多点云 XRAY 的动态透明度。
+ * @param {Object} pointcloud
+ * @param {THREE.Vector3} cameraPosition
+ * @param {THREE.Box3} boundingBox
+ * @returns {number}
+ */
+export function getPointcloudMultiXrayOpacity(pointcloud, cameraPosition, boundingBox) {
+	const baseDistance = pointcloud?.userData?.xrayTopViewBaseDistance;
+
+	// 未记录 top view 基准距离时，保持历史固定值行为，避免破坏现有流程。
+	if (!(typeof baseDistance === "number" && Number.isFinite(baseDistance) && baseDistance > 0)) {
+		return 0.01;
+	}
+
+	const center = boundingBox.getCenter(new THREE.Vector3());
+	const currentDistance = Math.max(cameraPosition.distanceTo(center), 0.000001);
+	const distanceFactor = THREE.MathUtils.clamp(baseDistance / currentDistance, 0.25, 4.0);
+
+	let levelFactor = 1;
+	if (Number.isFinite(pointcloud?.pointCount) && pointcloud.pointCount > 0) {
+		levelFactor = Math.max(1, (10 - Math.round(pointcloud?.pointCount / 10)) * (10 - Math.round(pointcloud?.pointCount / 10)) * 0.05);
+	}
+
+	return THREE.MathUtils.clamp(0.01 * distanceFactor * levelFactor, 0.001, 1);
 }
 
 /**

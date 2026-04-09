@@ -14,6 +14,7 @@ uniform vec3 cameraPosition;
 uniform float uNear;
 uniform float uFar;
 uniform int uXrayUseDistanceRamp;
+uniform float uXrayMultiOpacity;
 
 
 uniform mat4 projectionMatrix;
@@ -105,7 +106,8 @@ void main() {
 		if (uXrayUseDistanceRamp == 1) {
 			gl_FragColor.a = clamp((vDistance - uNear) / (uFar - uNear), 0.0, 0.1);
 		} else {
-			gl_FragColor.a = 0.01;
+			// 多点云 XRAY 透明度由 CPU 端按距离和层级计算后传入。
+			gl_FragColor.a = uXrayMultiOpacity;
 		}
 	#endif
 }

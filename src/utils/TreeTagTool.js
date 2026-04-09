@@ -4,6 +4,7 @@ import { Utils } from "../utils.js";
 import { EventDispatcher } from "../EventDispatcher.js";
 import {
 	clearPointcloudEffects,
+	isGroupPointcloudSource,
 	setPointcloudEDLEnabled,
 	setPointcloudXRAYEnabled,
 } from "../viewer/PointcloudEffectUtils.js";
@@ -58,6 +59,12 @@ export class TreeTagTool extends EventDispatcher {
 		if (e.button !== 0) {
 			return;
 		}
+
+		// 如果测量工具正在绘制标记，则跳过 TreeTagTool 的指针事件处理，避免功能冲突。
+		if (this.viewer.measuringTool?.eventMeasurement) {
+			return;
+		}
+
 		this._pointerActiveId = e.pointerId;
 		this._pointerDownX = e.clientX;
 		this._pointerDownY = e.clientY;
@@ -103,6 +110,11 @@ export class TreeTagTool extends EventDispatcher {
 		return this.viewer.scene.pointclouds.filter(
 			(pc) => pc.visible !== false
 		);
+	}
+
+	_isGroupSource() {
+		// TreeTag 多点云模式统一由来源模式控制，而不是依赖可见数量。
+		return isGroupPointcloudSource(this.viewer);
 	}
 
 	_isEDLSupported() {
@@ -159,7 +171,7 @@ export class TreeTagTool extends EventDispatcher {
 	_syncTags() {
 		const visible = this._getVisiblePointclouds();
 
-		if (visible.length < 2) {
+		if (!this._isGroupSource()) {
 			this.highlightedKeys = [];
 			for (const pc of [...this.tags.keys()]) {
 				this._removeTagForPointcloud(pc);
@@ -302,7 +314,8 @@ export class TreeTagTool extends EventDispatcher {
 		const hasSelection = highlightedKeys.length > 0;
 		const edlSupported = this._isEDLSupported();
 
-		if (this.tags.size === 0) {
+		if (!this._isGroupSource() || this.tags.size === 0) {
+			// 非多点云模式下不再维持 TreeTag 带来的批量效果状态。
 			// 少于两个可见点云时，不再维持 TreeTag 带来的基础效果状态。
 			for (const pc of this.viewer.scene.pointclouds) {
 				clearPointcloudEffects(pc);

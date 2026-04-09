@@ -4,6 +4,7 @@ import { Renderer as PotreeGLRenderer } from "../src/PotreeRenderer.js";
 import { PointCloudTree } from "../src/PointCloudTree.js";
 import { EDLRenderer } from "../src/viewer/EDLRenderer.js";
 import { HQSplatRenderer } from "../src/viewer/HQSplatRenderer.js";
+import { PotreeRenderer as ViewerPotreeRenderer } from "../src/viewer/PotreeRenderer.js";
 import { Utils } from "../src/utils.js";
 
 function createRendererMock() {
@@ -38,8 +39,15 @@ function createPointcloud(id, userData = {}) {
 				new THREE.Vector3(0, 0, 0),
 				new THREE.Vector3(10, 10, 10)
 			),
+			nodes: {
+				r: { level: 0 },
+				r1234: { level: 4 },
+			},
 			spacing: 1,
 		},
+		visibleNodes: [
+			{ getLevel: () => 3 },
+		],
 		material: {},
 	};
 }
@@ -50,7 +58,7 @@ function createCamera() {
 	return camera;
 }
 
-function createViewerForEffectRender(pointclouds) {
+function createViewerForEffectRender(pointclouds, sourceKind = "single") {
 	const renderer = createRendererMock();
 	const pRenderer = {
 		threeRenderer: renderer,
@@ -66,14 +74,18 @@ function createViewerForEffectRender(pointclouds) {
 		edlStrength: 0.4,
 		edlRadius: 1.4,
 		edlOpacity: 1.0,
+		// 测试中显式指定来源模式，避免再依赖点云数量推断。
+		treemindPointCloudSourceMode: { sourceKind },
 		scene: {
 			pointclouds,
+			treemindPointCloudSourceMode: { sourceKind },
 			scenePointCloud: {},
 			scene: {
 				traverse: vi.fn(),
 			},
 			sceneBG: {},
 			cameraBG: {},
+			cameraScreenSpace: {},
 			getActiveCamera: () => createCamera(),
 			volumes: [],
 			getBoundingBox: vi.fn(() => new THREE.Box3(
@@ -89,6 +101,8 @@ function createViewerForEffectRender(pointclouds) {
 			sceneControls: {},
 		},
 		clippingTool: {
+			update: vi.fn(),
+			sceneMarker: {},
 			sceneVolume: {},
 		},
 		navigationCube: {
@@ -100,6 +114,39 @@ function createViewerForEffectRender(pointclouds) {
 			matrixWorld: new THREE.Matrix4(),
 			matrixWorldInverse: new THREE.Matrix4(),
 			updateProjectionMatrix: vi.fn(),
+		},
+	};
+}
+
+function createHQEffectMaterialStub() {
+	return {
+		uniforms: {
+			uNear: { value: 0 },
+			uFar: { value: 0 },
+			uXrayUseDistanceRamp: { value: 1 },
+			uXrayMultiOpacity: { value: 0.01 },
+			cameraPosition: { value: null },
+		},
+		get uXrayUseDistanceRamp() {
+			return this.uniforms.uXrayUseDistanceRamp.value;
+		},
+		set uXrayUseDistanceRamp(value) {
+			this.uniforms.uXrayUseDistanceRamp.value = value;
+		},
+		get uXrayMultiOpacity() {
+			return this.uniforms.uXrayMultiOpacity.value;
+		},
+		set uXrayMultiOpacity(value) {
+			this.uniforms.uXrayMultiOpacity.value = value;
+		},
+		set uNear(value) {
+			this.uniforms.uNear.value = value;
+		},
+		set uFar(value) {
+			this.uniforms.uFar.value = value;
+		},
+		set cameraPosition(value) {
+			this.uniforms.cameraPosition.value = value;
 		},
 	};
 }
@@ -133,7 +180,7 @@ describe("Render effect routing", () => {
 	it("标准 EDL 渲染器应将普通点云与 EDL 点云分别分组渲染", () => {
 		const pc1 = createPointcloud("pc1", { edlEnabled: true });
 		const pc2 = createPointcloud("pc2");
-		const viewer = createViewerForEffectRender([pc1, pc2]);
+		const viewer = createViewerForEffectRender([pc1, pc2], "group");
 		const renderer = new EDLRenderer(viewer);
 
 		renderer.initEDL = vi.fn(() => {
@@ -167,14 +214,14 @@ describe("Render effect routing", () => {
 
 		renderer.render({ camera: createCamera() });
 
-		expect(renderer._renderRegularPointclouds).toHaveBeenCalledWith([pc2], expect.anything(), 2);
+		expect(renderer._renderRegularPointclouds).toHaveBeenCalledWith([pc2], expect.anything(), true);
 		expect(renderer._renderEDLPointclouds).toHaveBeenCalledWith([pc1], expect.anything(), 800, 600, []);
 	});
 
-	it("HQ 渲染器应分别为普通组与 EDL 组执行独立 pass", () => {
+	it("HQ 渲染器应分别为普通组和 EDL 组执行独立 pass", () => {
 		const pc1 = createPointcloud("pc1", { edlEnabled: true });
 		const pc2 = createPointcloud("pc2");
-		const viewer = createViewerForEffectRender([pc1, pc2]);
+		const viewer = createViewerForEffectRender([pc1, pc2], "group");
 		const renderer = new HQSplatRenderer(viewer);
 
 		renderer.init = vi.fn(() => {
@@ -214,5 +261,81 @@ describe("Render effect routing", () => {
 		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(2);
 		expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
 		expect(renderer._renderNormalizationPass.mock.calls[1][0].useEDL).toBe(true);
+	});
+
+	it("标准渲染器应为多点云 XRAY 写入动态透明度", () => {
+		const pc1 = createPointcloud("pc1", {
+			xrayEnabled: true,
+			xrayTopViewBaseDistance: Math.sqrt(75),
+		});
+		pc1.maxLevel = 2;
+		pc1.pointCount = 30;
+		pc1.material = { opacity: 1, uniforms: {} };
+		const pc2 = createPointcloud("pc2");
+		pc2.material = { opacity: 1, uniforms: {} };
+		const viewer = createViewerForEffectRender([pc1, pc2], "group");
+		const renderer = new ViewerPotreeRenderer(viewer);
+
+		renderer.render({ camera: createCamera() });
+
+		expect(pc1.material.uXrayUseDistanceRamp).toBe(0);
+		expect(pc1.material.uXrayMultiOpacity).toBeCloseTo(0.0245);
+	});
+
+	it("标准渲染器在 single 模式下应保留 XRAY distance ramp", () => {
+		const pc1 = createPointcloud("pc1", {
+			xrayEnabled: true,
+			xrayTopViewBaseDistance: Math.sqrt(75),
+		});
+		pc1.maxLevel = 2;
+		pc1.material = { opacity: 1, uniforms: {} };
+		const pc2 = createPointcloud("pc2");
+		pc2.material = { opacity: 1, uniforms: {} };
+		const viewer = createViewerForEffectRender([pc1, pc2], "single");
+		const renderer = new ViewerPotreeRenderer(viewer);
+
+		renderer.render({ camera: createCamera() });
+
+		expect(pc1.material.uXrayUseDistanceRamp).toBe(1);
+	});
+
+	it("HQ XRAY 材质准备阶段应同步动态透明度到双 pass 材质", () => {
+		const pc = createPointcloud("pc", {
+			xrayEnabled: true,
+			xrayTopViewBaseDistance: Math.sqrt(75),
+		});
+		pc.maxLevel = 2;
+		pc.pointCount = 30;
+		pc.material = {
+			opacity: 1,
+			size: 1,
+			minSize: 2,
+			maxSize: 50,
+			pointSizeType: 0,
+			visibleNodesTexture: {},
+			classification: {},
+			uniforms: {
+				classificationLUT: { value: { image: { data: new Uint8Array(4) } } },
+				uFilterReturnNumberRange: { value: [0, 7] },
+				uFilterNumberOfReturnsRange: { value: [0, 7] },
+				uFilterGPSTimeClipRange: { value: [0, 7] },
+				uFilterPointSourceIDClipRange: { value: [0, 65535] },
+			},
+			clipTask: 0,
+			clipMethod: 0,
+			clipBoxes: [],
+			clipPolygons: [],
+		};
+		const viewer = createViewerForEffectRender([pc, createPointcloud("pc2")], "group");
+		const renderer = new HQSplatRenderer(viewer);
+		const originalMaterials = new Map();
+		renderer.attributeMaterials.set(pc, createHQEffectMaterialStub());
+		renderer.depthMaterials.set(pc, createHQEffectMaterialStub());
+
+		renderer._prepareEffectMaterials(pc, createCamera(), true, originalMaterials);
+
+		expect(renderer.attributeMaterials.get(pc).uXrayUseDistanceRamp).toBe(0);
+		expect(renderer.attributeMaterials.get(pc).uXrayMultiOpacity).toBeCloseTo(0.0245);
+		expect(renderer.depthMaterials.get(pc).uXrayMultiOpacity).toBeCloseTo(0.0245);
 	});
 });

@@ -3,7 +3,7 @@ import {PointCloudSM} from "../utils/PointCloudSM.js";
 import {EyeDomeLightingMaterial} from "../materials/EyeDomeLightingMaterial.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
-import {getPointcloudEffectState, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
 
 export class EDLRenderer{
 	constructor(viewer){
@@ -183,8 +183,9 @@ export class EDLRenderer{
 		return partitionPointcloudsByEDL(visiblePointClouds, this.viewer.isEDLSupported());
 	}
 
-	_configureRegularPointclouds(pointclouds, camera, visiblePointCloudCount){
-		const xrayUseDistanceRamp = visiblePointCloudCount > 1 ? 0 : 1;
+	_configureRegularPointclouds(pointclouds, camera, isGroupSource){
+		// XRAY distance ramp 是否启用只取决于来源模式。
+		const xrayUseDistanceRamp = isGroupSource ? 0 : 1;
 
 		for (const pointcloud of pointclouds) {
 			const {material} = pointcloud;
@@ -209,6 +210,8 @@ export class EDLRenderer{
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
 				material.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+				// EDL 模式下的普通点云仍走同一套 XRAY shader，因此这里也要同步下发动态透明度。
+				material.uXrayMultiOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
 			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;
@@ -216,12 +219,12 @@ export class EDLRenderer{
 		}
 	}
 
-	_renderRegularPointclouds(pointclouds, camera, visiblePointCloudCount){
+	_renderRegularPointclouds(pointclouds, camera, isGroupSource){
 		if (pointclouds.length === 0) {
 			return;
 		}
 
-		this._configureRegularPointclouds(pointclouds, camera, visiblePointCloudCount);
+		this._configureRegularPointclouds(pointclouds, camera, isGroupSource);
 
 		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, null, {
 			clipSpheres: this.viewer.scene.volumes.filter(v => (v instanceof SphereVolume)),
@@ -281,7 +284,8 @@ export class EDLRenderer{
 
 		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
 		const {edlPointclouds, regularPointclouds} = this._getPointcloudGroups(visiblePointClouds);
-
+		const isGroupSource = isGroupPointcloudSource(viewer);
+		// 渲染阶段统一基于来源模式判断是否处于多点云分支。
 		if(this.screenshot){
 			let oldBudget = Potree.pointBudget;
 			Potree.pointBudget = Math.max(10 * 1000 * 1000, 2 * oldBudget);
@@ -315,7 +319,7 @@ export class EDLRenderer{
 
 		// 仅对启用了 EDL 的点云更新阴影贴图，避免混入普通点云。
 		this.renderShadowMap(edlPointclouds, camera, lights);
-		this._renderRegularPointclouds(regularPointclouds, camera, visiblePointClouds.length);
+		this._renderRegularPointclouds(regularPointclouds, camera, isGroupSource);
 		this._renderEDLPointclouds(edlPointclouds, camera, width, height, lights);
 
 		viewer.dispatchEvent({type: "render.pass.scene", viewer: viewer, renderTarget: this.rtRegular});

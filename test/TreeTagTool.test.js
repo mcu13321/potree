@@ -53,9 +53,12 @@ class MockScene extends EventDispatcher {
 }
 
 class MockViewer extends EventDispatcher {
-	constructor(scene = new MockScene(), edlSupported = true) {
+	constructor(scene = new MockScene(), edlSupported = true, sourceKind = "single") {
 		super();
 		this.scene = scene;
+		// 测试显式注入来源模式，避免再依赖点云数量推断。
+		this.treemindPointCloudSourceMode = { sourceKind };
+		this.scene.treemindPointCloudSourceMode = { sourceKind };
 		this.renderArea = document.createElement("div");
 		this.renderer = {
 			domElement: document.createElement("canvas"),
@@ -118,7 +121,7 @@ describe("TreeTagTool", () => {
 	let tool;
 
 	beforeEach(() => {
-		viewer = new MockViewer();
+		viewer = new MockViewer(new MockScene(), true, "group");
 		tool = new TreeTagTool(viewer);
 	});
 
@@ -132,10 +135,10 @@ describe("TreeTagTool", () => {
 		const scene = new MockScene();
 		const pc1 = createMockPointcloud("pc1");
 		scene.addPointCloud(pc1);
-		viewer = new MockViewer(scene);
+		viewer = new MockViewer(scene, true, "group");
 		tool = new TreeTagTool(viewer);
 
-		expect(tool.tags.size).toBe(0);
+		expect(tool.tags.size).toBe(1);
 
 		const pc2 = createMockPointcloud("pc2");
 		viewer.scene.addPointCloud(pc2);
@@ -318,9 +321,9 @@ describe("TreeTagTool", () => {
 
 		pc2.visible = false;
 
-		expect(tool.tags.size).toBe(0);
-		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: false });
-		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: false });
+		expect(tool.tags.size).toBe(1);
+		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
 	it("setHighlightedPointclouds 应支持传点云对象并同步效果", () => {
@@ -374,7 +377,7 @@ describe("TreeTagTool", () => {
 
 	it("无 EDL 能力时应回退到旧的 XRAY 高亮逻辑", () => {
 		cleanupViewer(viewer);
-		viewer = new MockViewer(new MockScene(), false);
+		viewer = new MockViewer(new MockScene(), false, "group");
 		tool = new TreeTagTool(viewer);
 
 		const pc1 = createMockPointcloud("pc1");
@@ -386,5 +389,19 @@ describe("TreeTagTool", () => {
 
 		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: false });
 		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: true });
+	});
+	it("single 模式下即使存在多个可见点云也不应创建标签", () => {
+		cleanupViewer(viewer);
+		viewer = new MockViewer(new MockScene(), true, "single");
+		tool = new TreeTagTool(viewer);
+
+		const pc1 = createMockPointcloud("pc1");
+		const pc2 = createMockPointcloud("pc2");
+		viewer.scene.addPointCloud(pc1);
+		viewer.scene.addPointCloud(pc2);
+
+		expect(tool.tags.size).toBe(0);
+		expectEffectState(pc1, { edlEnabled: false, xrayEnabled: false });
+		expectEffectState(pc2, { edlEnabled: false, xrayEnabled: false });
 	});
 });

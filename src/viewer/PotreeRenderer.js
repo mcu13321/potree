@@ -1,6 +1,6 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {getPointcloudEffectState} from "./PointcloudEffectUtils.js";
+import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource} from "./PointcloudEffectUtils.js";
 
 
 export class PotreeRenderer {
@@ -77,8 +77,8 @@ export class PotreeRenderer {
 		}
 
 		const visiblePointClouds = this.viewer.scene.pointclouds.filter(pc => pc.visible);
-		const visiblePointCloudCount = visiblePointClouds.length;
-		const xrayUseDistanceRamp = visiblePointCloudCount > 1 ? 0 : 1;
+		// 单双点云模式统一由 sourceKind 决定，不再依赖可见数量。
+		const xrayUseDistanceRamp = isGroupPointcloudSource(viewer) ? 0 : 1;
 		
 		for(const pointcloud of this.viewer.scene.pointclouds){
 			const {material} = pointcloud;
@@ -103,6 +103,8 @@ export class PotreeRenderer {
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
 				material.uXrayUseDistanceRamp = xrayUseDistanceRamp;
+				// 多点云 XRAY 透明度由距离和层级共同驱动，单点云仍沿用原有 distance ramp。
+				material.uXrayMultiOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
 			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;

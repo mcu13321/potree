@@ -1240,6 +1240,7 @@ export class Renderer {
 				shader.setUniform1f("uNear", material.uniforms.uNear.value);
 				shader.setUniform1f("uFar", material.uniforms.uFar.value);
 				shader.setUniform1i("uXrayUseDistanceRamp", material.uniforms.uXrayUseDistanceRamp.value);
+				shader.setUniform1f("uXrayMultiOpacity", material.uniforms.uXrayMultiOpacity.value);
 			}
 			
 			if(camera instanceof THREE.OrthographicCamera){
