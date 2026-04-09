@@ -285,7 +285,9 @@ export function updateVisibility(pointclouds, camera, renderer){
 		}
 
 		if (numVisiblePoints + node.getNumPoints() > Potree.pointBudget) {
-			break;
+			if (node.getLevel() !== 0) {
+				break;
+			}
 		}
 
 		if (!visible) {
