@@ -37,6 +37,7 @@ export class TreeTag {
 		this.domElement.style.zIndex = "1000";
 		this.domElement.innerText = this.labelText;
 		this.domElement.style.backgroundColor = "#cccccc";
+		this.domElement.style.opacity = "0.3";
 	}
 
 	/**
@@ -46,6 +47,7 @@ export class TreeTag {
 	updateStyle(highlighted) {
 		if (this.domElement) {
 			this.domElement.style.backgroundColor = highlighted ? "#00ff00" : "#cccccc";
+			this.domElement.style.opacity = highlighted ? "1.0" : "0.3";
 		}
 	}
 

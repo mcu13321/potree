@@ -26,6 +26,7 @@ export class Scene extends EventDispatcher{
 		this.cameraMode = CameraMode.PERSPECTIVE;
 		this.overrideCamera = null;
 		this.pointclouds = [];
+		this.groupOffsets = new Map();
 
 		this.measurements = [];
 		this.profiles = [];
@@ -140,17 +141,37 @@ export class Scene extends EventDispatcher{
 		this.scenePointCloud.add(pointcloud);
 		
 		if (translateToCenter) {
+			const sourceMode = pointcloud.treemindPointCloudSourceMode;
+			const cacheKey = pointcloud.sourceCacheKey;
 			const oldPosition = pointcloud.position.clone();
-			const size = this.getBoundingBox4One(pointcloud).getSize();
-			pointcloud.position.x = - size.x / 2
-			pointcloud.position.y = - size.y / 2
-			pointcloud.position.z = 0
+			
+			let targetPosition = null;
 
+			// 如果是组模式且已有缓存的共享位移，则直接应用该位移
+			if (sourceMode?.sourceKind === 'group' && cacheKey && this.groupOffsets.has(cacheKey)) {
+				const sharedOffset = this.groupOffsets.get(cacheKey);
+				targetPosition = oldPosition.clone().add(sharedOffset);
+			} else {
+				// 计算新的中心点（保留原有计算逻辑）
+				const size = this.getBoundingBox4One(pointcloud).getSize();
+				targetPosition = new THREE.Vector3(-size.x / 2, -size.y / 2, 0);
+				
+				// 如果是组模式的第一个点云，记录产生的位移量（New - Old）供后续同步
+				if (sourceMode?.sourceKind === 'group' && cacheKey) {
+					const offset = targetPosition.clone().sub(oldPosition);
+					this.groupOffsets.set(cacheKey, offset);
+				}
+			}
+
+			// 应用目标位置
+			pointcloud.position.copy(targetPosition);
+
+			// 为每个点云计算并保留它自己的 offset，链路保持不变
 			if (!pointcloud.userData) {
 				pointcloud.userData = {};
 			}
 			const newPosition = pointcloud.position.clone();
-			pointcloud.userData.offset = newPosition.subVectors(newPosition,oldPosition);
+			pointcloud.userData.offset = newPosition.subVectors(newPosition, oldPosition);
 		}
 
 		this.dispatchEvent({
