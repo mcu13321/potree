@@ -59,7 +59,7 @@ function loadPointCloud(viewer, data){
 
 	};
 
-	const promise = new Promise((resolve) => {
+	const promise = new Promise((resolve, reject) => {
 
 		const names = viewer.scene.pointclouds.map(p => p.name);
 		const alreadyExists = names.includes(data.name);
@@ -69,33 +69,67 @@ function loadPointCloud(viewer, data){
 			return;
 		}
 
-		Potree.loadPointCloud(data.url, data.name, (e) => {
-			const {pointcloud} = e;
-
-			pointcloud.position.set(...data.position);
-			pointcloud.rotation.set(...data.rotation);
-			pointcloud.scale.set(...data.scale);
-
-			loadMaterial(pointcloud.material);
-			// 新旧项目都走这里恢复点云效果；旧项目没有字段时交给 viewer 默认值兜底。
-			if (data.edlEnabled !== undefined || data.xrayEnabled !== undefined) {
-				clearPointcloudEffects(pointcloud);
-				if (data.edlEnabled !== undefined) {
-					setPointcloudEDLEnabled(pointcloud, data.edlEnabled, viewer.isEDLSupported());
-				}
-				if (data.xrayEnabled !== undefined && !data.edlEnabled) {
-					setPointcloudXRAYEnabled(pointcloud, data.xrayEnabled);
-				}
+		let settled = false;
+		const resolveOnce = (pointcloud) => {
+			if(settled){
+				return;
 			}
 
-			if (data.xrayOpacity !== undefined) {
-				pointcloud.userData.xrayOpacity = data.xrayOpacity;
-			}
-
-			viewer.scene.addPointCloud(pointcloud);
-
+			settled = true;
 			resolve(pointcloud);
-		});
+		};
+
+		const rejectOnce = (error) => {
+			if(settled){
+				return;
+			}
+
+			settled = true;
+			reject(error);
+		};
+
+		try{
+			// 同时兼容旧回调接口和新的 Promise 失败态，避免加载异常时项目流程永远挂起。
+			const loadPromise = Potree.loadPointCloud(data.url, data.name, (e) => {
+				try{
+					const {pointcloud} = e;
+
+					pointcloud.position.set(...data.position);
+					pointcloud.rotation.set(...data.rotation);
+					pointcloud.scale.set(...data.scale);
+
+					loadMaterial(pointcloud.material);
+					// 新旧项目都走这里恢复点云效果；旧项目没有字段时交给 viewer 默认值兜底。
+					if (data.edlEnabled !== undefined || data.xrayEnabled !== undefined) {
+						clearPointcloudEffects(pointcloud);
+						if (data.edlEnabled !== undefined) {
+							setPointcloudEDLEnabled(pointcloud, data.edlEnabled, viewer.isEDLSupported());
+						}
+						if (data.xrayEnabled !== undefined && !data.edlEnabled) {
+							setPointcloudXRAYEnabled(pointcloud, data.xrayEnabled);
+						}
+					}
+
+					if (data.xrayOpacity !== undefined) {
+						pointcloud.userData.xrayOpacity = data.xrayOpacity;
+					}
+
+					viewer.scene.addPointCloud(pointcloud);
+
+					resolveOnce(pointcloud);
+				}catch(error){
+					rejectOnce(error);
+				}
+			});
+
+			if(loadPromise && typeof loadPromise.catch === "function"){
+				loadPromise.catch(error => {
+					rejectOnce(error);
+				});
+			}
+		}catch(error){
+			rejectOnce(error);
+		}
 	});
 
 	return promise;
@@ -395,6 +429,8 @@ export async function loadProject(viewer, data){
 				loadGeopackage(viewer, geopackage);
 			}
 		}
+	}).catch(() => {
+		// 至少一个点云都没有成功时，直接跳过依赖投影信息的 geopackage 加载。
 	});
 
 	await Promise.all(pointcloudPromises);

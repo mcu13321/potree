@@ -252,4 +252,55 @@ describe("Project effect persistence", () => {
 		expect(effectState.xrayEnabled).toBe(true);
 		expect(viewer.scene.pointclouds[0].userData.xrayOpacity).toBe(0.25);
 	});
+
+	it("点云加载失败时，loadProject 应直接抛错而不是一直挂起", async () => {
+		const viewer = createLoadViewer();
+
+		globalThis.Potree = {
+			loadPointCloud() {
+				// 用同步异常模拟业务层拿到失败态，验证 loadProject 不会卡在等待中。
+				throw new Error("metadata failed");
+			},
+		};
+
+		const loadPromise = loadProject(viewer, {
+			type: "Potree",
+			settings: {
+				pointBudget: 1000,
+				fov: 60,
+				edlEnabled: false,
+				edlRadius: 1.4,
+				edlStrength: 0.4,
+				background: "gradient",
+				minNodeSize: 30,
+				showBoundingBoxes: false,
+			},
+			view: {
+				position: [0, 0, 0],
+				target: [1, 1, 1],
+			},
+			classification: {},
+			pointclouds: [{
+				name: "pc-fail",
+				url: "/pointclouds/pc-fail/metadata.json",
+				position: [0, 0, 0],
+				rotation: [0, 0, 0],
+				scale: [1, 1, 1],
+				material: {},
+			}],
+			measurements: [],
+			volumes: [],
+			cameraAnimations: [],
+			profiles: [],
+			annotations: [],
+			orientedImages: [],
+			geopackages: [],
+		}).catch(caughtError => caughtError);
+
+		const error = await loadPromise;
+
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toContain("metadata failed");
+		expect(viewer.scene.pointclouds).toHaveLength(0);
+	});
 });

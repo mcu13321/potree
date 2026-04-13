@@ -131,6 +131,18 @@ let resourcePath = scriptPath + '/resources';
 // resourcePath:build/potree/resources
 export {scriptPath, resourcePath};
 
+// 统一归一化点云加载错误，避免不同加载器返回的异常形态不一致。
+function normalizePointcloudLoadError(path, error){
+	if(error instanceof Error){
+		return error;
+	}
+
+	if(typeof error === "string" && error.length > 0){
+		return new Error(error);
+	}
+
+	return new Error(`failed to load point cloud from URL: ${path}`);
+}
 
 export function loadPointCloud(path, name, callback, getUrl){
 	let loaded = function(e){
@@ -138,98 +150,107 @@ export function loadPointCloud(path, name, callback, getUrl){
 		callback(e);
 	};
 
-	let promise = new Promise( resolve => {
+	let promise = new Promise((resolve, reject) => {
+		const resolvePointcloud = (pointcloud) => {
+			resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+		};
+
+		const rejectPointcloud = (error) => {
+			reject(normalizePointcloudLoadError(path, error));
+		};
 
 		// load pointcloud
 		if (!path){
-			// TODO: callback? comment? Hello? Bueller? Anyone?
+			rejectPointcloud(new Error("point cloud url is empty"));
 		} else if (path.includes('ept.json')) {
 			EptLoader.load(path, function(geometry) {
 				if (!geometry) {
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+					rejectPointcloud();
 				}
 				else {
 					let pointcloud = new PointCloudOctree(geometry);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+					resolvePointcloud(pointcloud);
 				}
+			}).catch(error => {
+				rejectPointcloud(error);
 			});
 		} else if (path.includes('.copc.laz')) {
 			CopcLoader.load(path, function(geometry) {
 				if (!geometry) {
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+					rejectPointcloud();
 				}
 				else {
 					let pointcloud = new PointCloudOctree(geometry);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+					resolvePointcloud(pointcloud);
 				}
+			}).catch(error => {
+				rejectPointcloud(error);
 			});
 		} else if (path.indexOf('cloud.js') > 0) {
 			POCLoader.load(path, function (geometry) {
 				if (!geometry) {
-					//callback({type: 'loading_failed'});
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+					rejectPointcloud();
 				} else {
 					let pointcloud = new PointCloudOctree(geometry);
-					// loaded(pointcloud);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+					resolvePointcloud(pointcloud);
 				}
+			}).catch(error => {
+				rejectPointcloud(error);
 			});
 		} else if (path.endsWith('metadata.json')) {
-			Potree.OctreeLoader.load(path, getUrl).then(e => {
+			OctreeLoader.load(path, getUrl).then(e => {
 				let geometry = e.geometry;
 
 				if(!geometry){
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+					rejectPointcloud();
 				}else{
 					let pointcloud = new PointCloudOctree(geometry);
 
 					let aPosition = pointcloud.getAttribute("position");
 
-					let material = pointcloud.material;
-					material.elevationRange = [
-						aPosition.range[0][2],
-						aPosition.range[1][2],
-					];
+					// 位置属性缺失时不再抛出二次异常，避免 metadata 成功但回调阶段挂起。
+					if(aPosition && aPosition.range){
+						let material = pointcloud.material;
+						material.elevationRange = [
+							aPosition.range[0][2],
+							aPosition.range[1][2],
+						];
+					}
 
-					// loaded(pointcloud);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+					resolvePointcloud(pointcloud);
 				}
-			});
-
-			OctreeLoader.load(path, getUrl, function (geometry) {
-				if (!geometry) {
-					//callback({type: 'loading_failed'});
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
-				} else {
-					let pointcloud = new PointCloudOctree(geometry);
-					// loaded(pointcloud);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
-				}
+			}).catch(error => {
+				rejectPointcloud(error);
 			});
 		} else if (path.indexOf('.vpc') > 0) {
 			PointCloudArena4DGeometry.load(path, function (geometry) {
 				if (!geometry) {
-					//callback({type: 'loading_failed'});
-					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+					rejectPointcloud();
 				} else {
 					let pointcloud = new PointCloudArena4D(geometry);
-					// loaded(pointcloud);
-					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
+					resolvePointcloud(pointcloud);
 				}
 			});
 		} else {
-			//callback({'type': 'loading_failed'});
-			console.error(new Error(`failed to load point cloud from URL: ${path}`));
+			rejectPointcloud();
 		}
 	});
 
 	if(callback){
-		promise.then(pointcloud => {
+		// 保持旧回调接口可用，同时把异常保留在返回 Promise 上供业务层感知。
+		let callbackPromise = promise.then(pointcloud => {
 			loaded(pointcloud);
+			return pointcloud;
 		});
-	}else{
-		return promise;
+
+		callbackPromise.catch(error => {
+			console.error(error);
+		});
+
+		return callbackPromise;
 	}
+
+	return promise;
 };
 
 

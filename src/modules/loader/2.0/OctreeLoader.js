@@ -1,9 +1,14 @@
-
 import * as THREE from "../../../../libs/three.js/build/three.module.js";
 import {PointAttribute, PointAttributes, PointAttributeTypes} from "../../../loader/PointAttributes.js";
 import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
+import {Utils} from "../../../utils.js";
 
 // let loadedNodes = new Set();
+
+// HTTP 错误统一封装
+function createRequestError(resource, response){
+	return new Error(`failed to fetch ${resource}: ${response.status} ${response.statusText}`);
+}
 
 export class NodeLoader{
 
@@ -14,139 +19,200 @@ export class NodeLoader{
 
 	async load(node){
 
-		if(node.loaded || node.loading){
-			return;
+		if(node.loaded){
+			return {success: true, node};
+		}
+
+		if(node.loading && node._loadPromise){
+			return node._loadPromise;
 		}
 
 		node.loading = true;
 		Potree.numNodesLoading++;
 
-		// console.log(node.name, node.numPoints);
+		// 为每个节点缓存一次进行中的 Promise，避免并发重复发起同一个节点加载。
+		node._loadPromise = new Promise((resolve) => {
+			let settled = false;
+			let worker = null;
+			let workerPath = null;
 
-		// if(loadedNodes.has(node.name)){
-		// 	// debugger;
-		// }
-		// loadedNodes.add(node.name);
-
-		try{
-			if(node.nodeType === 2){
-				await this.loadHierarchy(node);
-			}
-
-			let {byteOffset, byteSize} = node;
-
-
-			let urlOctree = this.getUrl ? await this.getUrl('octree.bin') : `${this.url}/../octree.bin`;
-
-			let first = byteOffset;
-			let last = byteOffset + byteSize - 1n;
-
-			let buffer;
-
-			if(byteSize === 0n){
-				buffer = new ArrayBuffer(0);
-				console.warn(`loaded node with 0 bytes: ${node.name}`);
-			}else{
-				let response = await fetch(urlOctree, {
-					headers: {
-						'content-type': 'multipart/byteranges',
-						'Range': `bytes=${first}-${last}`,
-					},
-				});
-
-				buffer = await response.arrayBuffer();
-			}
-
-			let workerPath;
-			if(this.metadata.encoding === "BROTLI"){
-				workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
-			}else{
-				workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
-			}
-
-			let worker = Potree.workerPool.getWorker(workerPath);
-
-			worker.onmessage = function (e) {
-
-				let data = e.data;
-				let buffers = data.attributeBuffers;
-
-				Potree.workerPool.returnWorker(workerPath, worker);
-
-				let geometry = new THREE.BufferGeometry();
-				
-				for(let property in buffers){
-
-					let buffer = buffers[property].buffer;
-
-					if(property === "position"){
-						geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-					}else if(property === "rgba"){
-						geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-					}else if(property === "NORMAL"){
-						//geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-						geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-					}else if (property === "INDICES") {
-						let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(buffer), 4);
-						bufferAttribute.normalized = true;
-						geometry.setAttribute('indices', bufferAttribute);
-					}else{
-						const bufferAttribute = new THREE.BufferAttribute(new Float32Array(buffer), 1);
-
-						let batchAttribute = buffers[property].attribute;
-						bufferAttribute.potree = {
-							offset: buffers[property].offset,
-							scale: buffers[property].scale,
-							preciseBuffer: buffers[property].preciseBuffer,
-							range: batchAttribute.range,
-						};
-
-						geometry.setAttribute(property, bufferAttribute);
-					}
-
+			const finalize = (result) => {
+				if(settled){
+					return;
 				}
-				// indices ??
 
-				node.density = data.density;
+				settled = true;
+				node._loadPromise = null;
+				resolve(result);
+			};
+
+			const finishSuccess = (geometry, density) => {
+				if(settled){
+					return;
+				}
+
+				node.density = density;
 				node.geometry = geometry;
 				node.loaded = true;
 				node.loading = false;
 				Potree.numNodesLoading--;
+
+				finalize({success: true, node});
 			};
 
-			let pointAttributes = node.octreeGeometry.pointAttributes;
-			let scale = node.octreeGeometry.scale;
+			const finishFailure = (error) => {
+				if(settled){
+					return;
+				}
 
-			let box = node.boundingBox;
-			let min = node.octreeGeometry.offset.clone().add(box.min);
-			let size = box.max.clone().sub(box.min);
-			let max = min.clone().add(size);
-			let numPoints = node.numPoints;
+				node.loaded = false;
+				node.loading = false;
+				Potree.numNodesLoading--;
 
-			let offset = node.octreeGeometry.loader.offset;
+				if(worker){
+					worker.onmessage = null;
+					worker.onerror = null;
+					worker.onmessageerror = null;
+					if(typeof worker.terminate === "function"){
+						worker.terminate();
+					}
+					worker = null;
+				}
 
-			let message = {
-				name: node.name,
-				buffer: buffer,
-				pointAttributes: pointAttributes,
-				scale: scale,
-				min: min,
-				max: max,
-				size: size,
-				offset: offset,
-				numPoints: numPoints
+				console.log(`failed to load ${node.name}`);
+				console.log(error);
+				console.log(`trying again!`);
+
+				finalize({success: false, node, error});
 			};
 
-			worker.postMessage(message, [message.buffer]);
-		}catch(e){
-			node.loaded = false;
-			node.loading = false;
-			Potree.numNodesLoading--;
+			let loadTask = async () => {
+				try{
+					if(node.nodeType === 2){
+						await this.loadHierarchy(node);
+					}
 
-			console.log(`failed to load ${node.name}`);
-			console.log(e);
-			console.log(`trying again!`);
-		}
+					let {byteOffset, byteSize} = node;
+					let urlOctree = this.getUrl ? await this.getUrl('octree.bin') : `${this.url}/../octree.bin`;
+
+					let first = byteOffset;
+					let last = byteOffset + byteSize - 1n;
+					let buffer;
+
+					if(byteSize === 0n){
+						buffer = new ArrayBuffer(0);
+						console.warn(`loaded node with 0 bytes: ${node.name}`);
+					}else{
+						let response = await Utils.retryFetch(urlOctree, {
+							headers: {
+								'content-type': 'multipart/byteranges',
+								'Range': `bytes=${first}-${last}`,
+							},
+						});
+
+						if(!response.ok){
+							throw createRequestError(urlOctree, response);
+						}
+
+						buffer = await response.arrayBuffer();
+					}
+
+					if(this.metadata.encoding === "BROTLI"){
+						workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
+					}else{
+						workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
+					}
+
+					worker = Potree.workerPool.getWorker(workerPath);
+
+					worker.onmessage = (e) => {
+						let data = e.data;
+						let buffers = data.attributeBuffers;
+
+						Potree.workerPool.returnWorker(workerPath, worker);
+						worker.onmessage = null;
+						worker.onerror = null;
+						worker.onmessageerror = null;
+						worker = null;
+
+						let geometry = new THREE.BufferGeometry();
+						
+						for(let property in buffers){
+							let attributeBuffer = buffers[property].buffer;
+
+							if(property === "position"){
+								geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
+							}else if(property === "rgba"){
+								geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4, true));
+							}else if(property === "NORMAL"){
+								// 法向量在 worker 中已经解码为连续的 float buffer，这里直接复用。
+								geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
+							}else if (property === "INDICES") {
+								let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4);
+								bufferAttribute.normalized = true;
+								geometry.setAttribute('indices', bufferAttribute);
+							}else{
+								const bufferAttribute = new THREE.BufferAttribute(new Float32Array(attributeBuffer), 1);
+
+								let batchAttribute = buffers[property].attribute;
+								bufferAttribute.potree = {
+									offset: buffers[property].offset,
+									scale: buffers[property].scale,
+									preciseBuffer: buffers[property].preciseBuffer,
+									range: batchAttribute.range,
+								};
+
+								geometry.setAttribute(property, bufferAttribute);
+							}
+
+						}
+
+						finishSuccess(geometry, data.density);
+					};
+
+					// worker 解码失败时必须显式回传错误，否则根节点加载会一直挂起。
+					worker.onerror = (event) => {
+						let error = event?.error ?? new Error(`decoder worker failed for node ${node.name}`);
+						finishFailure(error);
+					};
+
+					worker.onmessageerror = () => {
+						finishFailure(new Error(`decoder worker message error for node ${node.name}`));
+					};
+
+					let pointAttributes = node.octreeGeometry.pointAttributes;
+					let scale = node.octreeGeometry.scale;
+
+					let box = node.boundingBox;
+					let min = node.octreeGeometry.offset.clone().add(box.min);
+					let size = box.max.clone().sub(box.min);
+					let max = min.clone().add(size);
+					let numPoints = node.numPoints;
+
+					let offset = node.octreeGeometry.loader.offset;
+
+					let message = {
+						name: node.name,
+						buffer: buffer,
+						pointAttributes: pointAttributes,
+						scale: scale,
+						min: min,
+						max: max,
+						size: size,
+						offset: offset,
+						numPoints: numPoints
+					};
+
+					worker.postMessage(message, [message.buffer]);
+				}catch(e){
+					finishFailure(e);
+				}
+			};
+
+			loadTask();
+		});
+
+		return node._loadPromise;
 	}
 
 	parseHierarchy(node, buffer){
@@ -251,15 +317,16 @@ export class NodeLoader{
 		let first = hierarchyByteOffset;
 		let last = first + hierarchyByteSize - 1n;
 
-		let response = await fetch(hierarchyPath, {
+		let response = await Utils.retryFetch(hierarchyPath, {
 			headers: {
 				'content-type': 'multipart/byteranges',
 				'Range': `bytes=${first}-${last}`,
 			},
 		});
 
-
-
+		if(!response.ok){
+			throw createRequestError(hierarchyPath, response);
+		}
 		let buffer = await response.arrayBuffer();
 
 		this.parseHierarchy(node, buffer);
@@ -387,7 +454,12 @@ export class OctreeLoader{
 
 	static async load(url, getUrl){
     const trueUrl = getUrl ? await getUrl(url) : url;
-		let response = await fetch(trueUrl);
+		let response = await Utils.retryFetch(trueUrl);
+
+		if(!response.ok){
+			throw createRequestError(trueUrl, response);
+		}
+
 		let metadata = await response.json();
 
 		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
@@ -450,7 +522,11 @@ export class OctreeLoader{
 
 		octree.root = root;
 
-		loader.load(root);
+		// 只有根节点首包真正可解码后，外层才算“点云已加载完成”。
+		let rootLoadResult = await loader.load(root);
+		if(!rootLoadResult.success){
+			throw rootLoadResult.error ?? new Error(`failed to load root node for ${url}`);
+		}
 
 		let result = {
 			geometry: octree,

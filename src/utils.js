@@ -1063,16 +1063,70 @@ export class Utils {
 
 	static async waitAny(promises){
 		
-		return new Promise( (resolve) => {
+		return new Promise( (resolve, reject) => {
+			if(promises.length === 0){
+				resolve();
+				return;
+			}
 
+			let pendingCount = promises.length;
+			let lastError = null;
+
+			// 同时消费 resolve/reject，避免其中任一 Promise 失败时产生未处理拒绝。
 			promises.map( promise => {
 				promise.then( () => {
 					resolve();
+				}).catch(error => {
+					pendingCount--;
+					lastError = error;
+
+					if(pendingCount === 0){
+						reject(lastError);
+					}
 				});
 			});
 
 		});
 
+	}
+
+	/**
+	 * 带有指数退避重试机制的 fetch 封装。
+	 * @param {string} url 
+	 * @param {Object} options fetch 原生配置
+	 * @param {Object} retryOptions 重试配置 { maxRetries: 3, initialDelay: 1000 }
+	 */
+	static async retryFetch(url, options = {}, retryOptions = {}) {
+		const maxRetries = retryOptions.maxRetries ?? 3;
+		const initialDelay = retryOptions.initialDelay ?? 1000;
+		let lastError = null;
+
+		for (let i = 0; i <= maxRetries; i++) {
+			try {
+				const response = await fetch(url, options);
+				
+				if (response.ok) {
+					return response;
+				}
+
+				if (i === maxRetries || (response.status >= 400 && response.status < 500 && response.status !== 408)) {
+					return response;
+				}
+
+				console.warn(`Fetch failed for ${url} (Status: ${response.status}). Retrying... (${i + 1}/${maxRetries})`);
+			} catch (error) {
+				lastError = error;
+				if (i === maxRetries) {
+					throw error;
+				}
+				console.warn(`Fetch error for ${url}: ${error.message}. Retrying... (${i + 1}/${maxRetries})`);
+			}
+
+			const delay = initialDelay * Math.pow(2, i);
+			await new Promise(resolve => setTimeout(resolve, delay));
+		}
+
+		throw lastError || new Error(`Failed to fetch ${url} after ${maxRetries} retries`);
 	}
 
 }
