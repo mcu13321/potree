@@ -11,6 +11,12 @@ import {
 
 /** 按下与松开之间位移超过该阈值（像素）时视为拖拽，不触发选中。 */
 const POINTER_DRAG_THRESHOLD_PX = 5;
+const _raycaster = new THREE.Raycaster();
+const _pointerNdc = new THREE.Vector2();
+const _targetWorldPosition = new THREE.Vector3();
+const _boxSize = new THREE.Vector3();
+const _boxCenter = new THREE.Vector3();
+const _viewPosition = new THREE.Vector3();
 
 export class TreeTagTool extends EventDispatcher {
 	constructor(viewer) {
@@ -18,8 +24,10 @@ export class TreeTagTool extends EventDispatcher {
 
 		this.viewer = viewer;
 		this.renderer = viewer.renderer;
+		this.scene = new THREE.Scene();
+		this.scene.name = "scene_tree_tag";
 		this.tags = new Map(); // pointcloud -> TreeTag
-		/** 当前高亮对应的身份键，优先 `pointcloud.userData.key`，缺省时为 `pointcloud.name`。空数组表示无选中（全部高亮）。 */
+		/** 当前高亮对应的身份键，优先 `pointcloud.userData.key`，缺省时回退到 `pointcloud.name`。 */
 		this.highlightedKeys = [];
 
 		this._pointerActiveId = null;
@@ -33,6 +41,7 @@ export class TreeTagTool extends EventDispatcher {
 		this._onPointerUpDocument = (e) => this._handlePointerUpDocument(e);
 		this._onPointerCancelDocument = (e) => this._handlePointerCancelDocument(e);
 		this._onUpdate = () => this.update();
+		this._onRender = () => this.render();
 
 		// 初始化时先为已有点云绑定可见性监听，再同步标签和效果状态。
 		for (const pointcloud of viewer.scene.pointclouds) {
@@ -41,6 +50,7 @@ export class TreeTagTool extends EventDispatcher {
 		this._syncTags();
 
 		viewer.addEventListener("update", this._onUpdate);
+		viewer.addEventListener("render.pass.perspective_overlay", this._onRender);
 		viewer.addEventListener("scene_changed", this._onSceneChange);
 		viewer.scene.addEventListener("pointcloud_added", this._onPointcloudAdded);
 
@@ -118,7 +128,7 @@ export class TreeTagTool extends EventDispatcher {
 	}
 
 	_isEDLSupported() {
-		// 测试环境下 viewer 可能只是最小 mock，这里对能力检测做兼容兜底。
+		// 测试环境里的 viewer 可能只是最小 mock，这里对能力检测做兼容兜底。
 		if (typeof this.viewer.isEDLSupported === "function") {
 			return this.viewer.isEDLSupported();
 		}
@@ -127,15 +137,16 @@ export class TreeTagTool extends EventDispatcher {
 	}
 
 	/**
-	 * 与标签、选中一致的身份键：优先 `userData.key`，否则 `name`。
+	 * 与标签、选中一致的身份键：优先 `userData.key`，否则回退到 `name`。
 	 * @param {Object} pointcloud
 	 * @returns {string}
 	 */
 	_highlightIdentityKey(pointcloud) {
-		const k = pointcloud?.userData?.key;
-		if (k !== undefined && k !== null) {
-			return String(k);
+		const key = pointcloud?.userData?.key;
+		if (key !== undefined && key !== null) {
+			return String(key);
 		}
+
 		return String(pointcloud?.name ?? "");
 	}
 
@@ -145,17 +156,24 @@ export class TreeTagTool extends EventDispatcher {
 				return pc;
 			}
 		}
+
 		return null;
 	}
 
 	_bindVisibilityChanged(pointcloud) {
-		if (pointcloud._treeTagToolVisibilityBound) return;
+		if (pointcloud._treeTagToolVisibilityBound) {
+			return;
+		}
+
 		pointcloud._treeTagToolVisibilityBound = true;
 		pointcloud.addEventListener("visibility_changed", this._onVisibilityChanged);
 	}
 
 	_unbindVisibilityChanged(pointcloud) {
-		if (!pointcloud._treeTagToolVisibilityBound) return;
+		if (!pointcloud._treeTagToolVisibilityBound) {
+			return;
+		}
+
 		pointcloud._treeTagToolVisibilityBound = false;
 		pointcloud.removeEventListener("visibility_changed", this._onVisibilityChanged);
 	}
@@ -165,9 +183,6 @@ export class TreeTagTool extends EventDispatcher {
 		this._syncTags();
 	}
 
-	/**
-	 * 同步 tag：仅当多个点云可见时添加 tag；可见数 < 2 时移除全部 tag 并清空效果。
-	 */
 	_syncTags() {
 		const visible = this._getVisiblePointclouds();
 
@@ -186,15 +201,15 @@ export class TreeTagTool extends EventDispatcher {
 			}
 		}
 
-		// 仅为尚未有 tag 的可见点云添加 tag；文案优先 `userData.key`，否则为可见顺序 1,2,3…
+		// 仅为尚未创建 tag 的可见点云补齐 sprite，文案优先 `userData.key`。
 		visible.forEach((pc, i) => {
-			if (this.tags.has(pc)) return;
+			if (this.tags.has(pc)) {
+				return;
+			}
+
 			const tag = new TreeTag(pc, i + 1);
 			this.tags.set(pc, tag);
-			const renderArea = this._getRenderArea();
-			if (renderArea && tag.domElement && !tag.domElement.parentElement) {
-				renderArea.appendChild(tag.domElement);
-			}
+			this.scene.add(tag);
 		});
 
 		this._applyHighlightStates();
@@ -218,6 +233,7 @@ export class TreeTagTool extends EventDispatcher {
 				this._removeTagForPointcloud(pc);
 			}
 		}
+
 		e.scene.addEventListener("pointcloud_added", this._onPointcloudAdded);
 		for (const pc of e.scene.pointclouds) {
 			this._bindVisibilityChanged(pc);
@@ -225,36 +241,35 @@ export class TreeTagTool extends EventDispatcher {
 		this._syncTags();
 	}
 
+	_getClientToNdc(clientX, clientY) {
+		const canvas = this.renderer.domElement;
+		const rect = canvas.getBoundingClientRect();
+		const width = rect.width || canvas.clientWidth || 1;
+		const height = rect.height || canvas.clientHeight || 1;
+
+		_pointerNdc.set(
+			((clientX - rect.left) / width) * 2 - 1,
+			-((clientY - rect.top) / height) * 2 + 1,
+		);
+
+		return _pointerNdc;
+	}
+
+	_pickTag(clientX, clientY) {
+		const camera = this.viewer.scene.getActiveCamera();
+		const pointer = this._getClientToNdc(clientX, clientY);
+
+		_raycaster.setFromCamera(pointer, camera);
+		const intersections = _raycaster.intersectObjects([...this.tags.values()], false);
+
+		return intersections[0]?.object ?? null;
+	}
+
 	/**
-	 * 点击优先级：先判断 tag 命中，没有命中时再射线检测点云。
+	 * 点击优先级：先判断 sprite tag 命中，没有命中时再射线检测点云。
 	 */
 	_handleClick(e) {
-		let hitTag = null;
-		for (const tag of this.tags.values()) {
-			if (e.target === tag.domElement) {
-				hitTag = tag;
-				break;
-			}
-		}
-
-		if (!hitTag) {
-			const clientX = e.clientX;
-			const clientY = e.clientY;
-			for (const tag of this.tags.values()) {
-				if (!tag.domElement || tag.domElement.style.display === "none") continue;
-				const rect = tag.domElement.getBoundingClientRect();
-				if (
-					clientX >= rect.left &&
-					clientX <= rect.right &&
-					clientY >= rect.top &&
-					clientY <= rect.bottom
-				) {
-					hitTag = tag;
-					break;
-				}
-			}
-		}
-
+		const hitTag = this._pickTag(e.clientX, e.clientY);
 		if (hitTag) {
 			this._applySelection(hitTag.pointcloud, e.ctrlKey || e.metaKey);
 			return;
@@ -295,15 +310,13 @@ export class TreeTagTool extends EventDispatcher {
 			} else {
 				this.highlightedKeys = [...this.highlightedKeys, key];
 			}
+		} else if (
+			this.highlightedKeys.length === 1 &&
+			this.highlightedKeys[0] === key
+		) {
+			this.highlightedKeys = [];
 		} else {
-			if (
-				this.highlightedKeys.length === 1 &&
-				this.highlightedKeys[0] === key
-			) {
-				this.highlightedKeys = [];
-			} else {
-				this.highlightedKeys = [key];
-			}
+			this.highlightedKeys = [key];
 		}
 
 		this._applyHighlightStates();
@@ -316,7 +329,6 @@ export class TreeTagTool extends EventDispatcher {
 
 		if (!this._isGroupSource() || this.tags.size === 0) {
 			// 非多点云模式下不再维持 TreeTag 带来的批量效果状态。
-			// 少于两个可见点云时，不再维持 TreeTag 带来的基础效果状态。
 			for (const pc of this.viewer.scene.pointclouds) {
 				clearPointcloudEffects(pc);
 			}
@@ -352,46 +364,87 @@ export class TreeTagTool extends EventDispatcher {
 		});
 	}
 
+	_getTagAnchorWorldPosition(pointcloud, tagBaseScale = 0) {
+		pointcloud.updateMatrixWorld?.(true);
+
+		const offset = pointcloud.userData?.offset ?? { x: 0, y: 0, z: 0 };
+		const hasExplicitLocation =
+			pointcloud.userData?.locX != null &&
+			pointcloud.userData?.locY != null &&
+			pointcloud.userData?.locZ != null;
+
+		if (hasExplicitLocation) {
+			// 标签锚点沿 z 轴下移半个标签边长，替代原先固定的 -0.4 偏移。
+			const halfTagSize = Math.max(0, tagBaseScale);
+			_targetWorldPosition.set(
+				Number(pointcloud.userData.locX) + Number(offset.x ?? 0),
+				Number(pointcloud.userData.locY) + Number(offset.y ?? 0),
+				Number(pointcloud.userData.locZ) + Number(offset.z ?? 0) - halfTagSize,
+			);
+			return _targetWorldPosition;
+		}
+
+		const box = pointcloud.pcoGeometry?.tightBoundingBox || pointcloud.boundingBox;
+		if (!box) {
+			return null;
+		}
+
+		const boxWorld = Utils.computeTransformedBoundingBox(
+			box,
+			pointcloud.matrixWorld
+		);
+		boxWorld.getCenter(_boxCenter);
+		_targetWorldPosition.set(
+			_boxCenter.x,
+			_boxCenter.y,
+			boxWorld.min.z,
+		);
+
+		return _targetWorldPosition;
+	}
+
+	_getTagBaseScale(pointcloud) {
+		const box = pointcloud.pcoGeometry?.tightBoundingBox || pointcloud.boundingBox;
+		if (!box) {
+			return 1.5;
+		}
+
+		const boxWorld = Utils.computeTransformedBoundingBox(
+			box,
+			pointcloud.matrixWorld
+		);
+		boxWorld.getSize(_boxSize);
+		const maxDimension = Math.max(_boxSize.x, _boxSize.y, _boxSize.z);
+
+		// 让标签基础尺寸和点云体量挂钩，再交给 sprite 的 sizeAttenuation 处理远近变化。
+		return THREE.MathUtils.clamp(maxDimension * 0.03, 1.2, 24);
+	}
+
 	update() {
 		const camera = this.viewer.scene.getActiveCamera();
-		const renderAreaSize = this.viewer.renderer.getSize(new THREE.Vector2());
-		const clientWidth = renderAreaSize.width;
-		const clientHeight = renderAreaSize.height;
 
 		for (const [pointcloud, tag] of this.tags) {
-			const domElement = tag.domElement;
-			if (!domElement) continue;
-
-			const box = pointcloud.pcoGeometry?.tightBoundingBox || pointcloud.boundingBox;
-			if (!box) continue;
-
-			const boxWorld = Utils.computeTransformedBoundingBox(
-				box,
-				pointcloud.matrixWorld
-			);
-			const center = boxWorld.getCenter(new THREE.Vector3());
-			const bottomCenterWorld = new THREE.Vector3(
-				center.x,
-				center.y,
-				boxWorld.min.z
-			);
-
-			const viewPos = bottomCenterWorld
-				.clone()
-				.applyMatrix4(camera.matrixWorldInverse);
-			if (viewPos.z > 0) {
-				domElement.style.display = "none";
+			const tagBaseScale = this._getTagBaseScale(pointcloud);
+			const targetWorldPosition = this._getTagAnchorWorldPosition(pointcloud, tagBaseScale);
+			if (!targetWorldPosition) {
+				tag.visible = false;
 				continue;
 			}
 
-			const screenPos = bottomCenterWorld.clone().project(camera);
-			const x = Math.round((screenPos.x + 1) * clientWidth / 2);
-			const y = Math.round((-screenPos.y + 1) * clientHeight / 2);
+			_viewPosition.copy(targetWorldPosition).applyMatrix4(camera.matrixWorldInverse);
+			if (_viewPosition.z > 0) {
+				tag.visible = false;
+				continue;
+			}
 
-			domElement.style.display = "flex";
-			domElement.style.left = `${x - 12}px`;
-			domElement.style.top = `${y - 12}px`;
+			tag.visible = pointcloud.visible !== false;
+			tag.position.copy(targetWorldPosition);
+			tag.setBaseScale(tagBaseScale);
 		}
+	}
+
+	render() {
+		this.renderer.render(this.scene, this.viewer.scene.getActiveCamera());
 	}
 
 	/**
@@ -411,7 +464,7 @@ export class TreeTagTool extends EventDispatcher {
 	}
 
 	/**
-	 * 供外部修改高亮状态时调用。传入键值数组。
+	 * 供外部修改高亮状态时调用，传入键值数组或点云对象数组。
 	 * @param {Array<string|number|Object>} items
 	 */
 	setHighlightedPointclouds(items) {
@@ -440,6 +493,7 @@ export class TreeTagTool extends EventDispatcher {
 		}
 
 		this.viewer.removeEventListener("update", this._onUpdate);
+		this.viewer.removeEventListener("render.pass.perspective_overlay", this._onRender);
 		this.viewer.removeEventListener("scene_changed", this._onSceneChange);
 		this.viewer.scene.removeEventListener("pointcloud_added", this._onPointcloudAdded);
 
