@@ -46,6 +46,10 @@ class MockScene extends EventDispatcher {
 	constructor() {
 		super();
 		this.pointclouds = [];
+		// TreeTag 离屏遮挡方案会同时访问普通场景和点云场景。
+		this.scene = new THREE.Scene();
+		this.scenePointCloud = new THREE.Scene();
+		this.volumes = [];
 		this.camera = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 1000);
 		this.camera.position.set(5, -25, 15);
 		this.camera.lookAt(new THREE.Vector3(5, 5, 0));
@@ -73,9 +77,17 @@ class MockViewer extends EventDispatcher {
 		this.controls = { enabled: true };
 		this.measuringTool = { eventMeasurement: null };
 		this.renderArea = document.createElement("div");
+		// 补齐离屏合成链需要的渲染接口，避免测试环境依赖真实 WebGL。
 		this.renderer = {
 			domElement: document.createElement("canvas"),
 			getSize: vi.fn((target) => target.set(800, 600)),
+			getRenderTarget: vi.fn(() => null),
+			setRenderTarget: vi.fn(),
+			clear: vi.fn(),
+			render: vi.fn(),
+		};
+		// point cloud 渲染单独走 pRenderer，这里只校验调用参数。
+		this.pRenderer = {
 			render: vi.fn(),
 		};
 		this.isEDLSupported = vi.fn(() => edlSupported);
@@ -173,6 +185,8 @@ describe("TreeTagTool", () => {
 		expect(tool.scene.children).toContain(tag1);
 		expect(tool.scene.children).toContain(tag2);
 		expect(tag1.domElement).toBeUndefined();
+		// 透明背景像素必须被 alpha test 丢弃，避免标签之间按整块矩形互相遮挡。
+		expect(tag1.material.alphaTest).toBeGreaterThan(0);
 
 		// 默认无选中时，多个点云都应进入 EDL 高亮态。
 		expectEffectState(pc1, { edlEnabled: true, xrayEnabled: false });
@@ -446,12 +460,29 @@ describe("TreeTagTool", () => {
 	it("render.pass.perspective_overlay 阶段会渲染 treeTag overlay scene", () => {
 		const pc1 = createMockPointcloud("pc1");
 		viewer.scene.addPointCloud(pc1);
+		tool.update();
+
+		// 监听最终全屏合成调用，确认不再直接把标签画到主场景之上。
+		const screenPassSpy = vi.spyOn(Utils.screenPass, "render");
 
 		viewer.dispatchEvent({ type: "render.pass.perspective_overlay" });
 
+		expect(viewer.pRenderer.render).toHaveBeenCalledWith(
+			viewer.scene.scenePointCloud,
+			viewer.scene.getActiveCamera(),
+			tool.occlusionRenderTarget,
+			expect.objectContaining({
+				pointclouds: [pc1],
+			})
+		);
 		expect(viewer.renderer.render).toHaveBeenCalledWith(
 			tool.scene,
-			viewer.scene.getActiveCamera()
+			viewer.scene.getActiveCamera(),
+			tool.tagRenderTarget
+		);
+		expect(screenPassSpy).toHaveBeenCalledWith(
+			viewer.renderer,
+			tool.compositeMaterial
 		);
 	});
 });

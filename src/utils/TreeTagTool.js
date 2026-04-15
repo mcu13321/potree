@@ -2,6 +2,7 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 import { TreeTag } from "./TreeTag.js";
 import { Utils } from "../utils.js";
 import { EventDispatcher } from "../EventDispatcher.js";
+import { SphereVolume } from "./Volume.js";
 import {
 	clearPointcloudEffects,
 	isGroupPointcloudSource,
@@ -17,6 +18,42 @@ const _targetWorldPosition = new THREE.Vector3();
 const _boxSize = new THREE.Vector3();
 const _boxCenter = new THREE.Vector3();
 const _viewPosition = new THREE.Vector3();
+const _renderSize = new THREE.Vector2();
+
+const TREE_TAG_COMPOSITE_VERTEX_SHADER = `
+	varying vec2 vUv;
+
+	void main() {
+		vUv = uv;
+		gl_Position = vec4(position.xy, 0.0, 1.0);
+	}
+`;
+
+const TREE_TAG_COMPOSITE_FRAGMENT_SHADER = `
+	uniform sampler2D uTagColor;
+	uniform sampler2D uTagDepth;
+	uniform sampler2D uOcclusionDepth;
+	uniform float uDepthBias;
+	varying vec2 vUv;
+
+	void main() {
+		vec4 tagColor = texture2D(uTagColor, vUv);
+		float tagDepth = texture2D(uTagDepth, vUv).r;
+		float occlusionDepth = texture2D(uOcclusionDepth, vUv).r;
+
+		bool hasTag = tagDepth < 0.999999;
+		if (!hasTag || tagColor.a <= 0.0) {
+			discard;
+		}
+
+		// 只有当遮挡物深度真实存在且更靠近相机时，才丢弃标签像素。
+		if (occlusionDepth < 0.999999 && occlusionDepth <= tagDepth - uDepthBias) {
+			discard;
+		}
+
+		gl_FragColor = tagColor;
+	}
+`;
 
 export class TreeTagTool extends EventDispatcher {
 	constructor(viewer) {
@@ -27,6 +64,21 @@ export class TreeTagTool extends EventDispatcher {
 		this.scene = new THREE.Scene();
 		this.scene.name = "scene_tree_tag";
 		this.tags = new Map(); // pointcloud -> TreeTag
+		this.tagRenderTarget = null;
+		this.occlusionRenderTarget = null;
+		this.compositeMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uTagColor: { value: null },
+				uTagDepth: { value: null },
+				uOcclusionDepth: { value: null },
+				uDepthBias: { value: 1e-4 },
+			},
+			vertexShader: TREE_TAG_COMPOSITE_VERTEX_SHADER,
+			fragmentShader: TREE_TAG_COMPOSITE_FRAGMENT_SHADER,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+		});
 		/** 当前高亮对应的身份键，优先 `pointcloud.userData.key`，缺省时回退到 `pointcloud.name`。 */
 		this.highlightedKeys = [];
 
@@ -120,6 +172,37 @@ export class TreeTagTool extends EventDispatcher {
 		return this.viewer.scene.pointclouds.filter(
 			(pc) => pc.visible !== false
 		);
+	}
+
+	_createRenderTarget(width, height) {
+		return new THREE.WebGLRenderTarget(width, height, {
+			minFilter: THREE.LinearFilter,
+			magFilter: THREE.LinearFilter,
+			format: THREE.RGBAFormat,
+			depthTexture: new THREE.DepthTexture(undefined, undefined, THREE.UnsignedIntType),
+		});
+	}
+
+	_ensureRenderTargets(width, height) {
+		const safeWidth = Math.max(1, Math.floor(width));
+		const safeHeight = Math.max(1, Math.floor(height));
+
+		if (!this.tagRenderTarget) {
+			// 标签颜色与深度分开存储，供最终屏幕合成阶段采样。
+			this.tagRenderTarget = this._createRenderTarget(safeWidth, safeHeight);
+		}
+		if (!this.occlusionRenderTarget) {
+			// 遮挡 RT 只需要保留深度，但保留普通颜色附件可以减少额外兼容性问题。
+			this.occlusionRenderTarget = this._createRenderTarget(safeWidth, safeHeight);
+		}
+
+		this.tagRenderTarget.setSize(safeWidth, safeHeight);
+		this.occlusionRenderTarget.setSize(safeWidth, safeHeight);
+	}
+
+	_clearRenderTarget(target) {
+		this.renderer.setRenderTarget(target);
+		this.renderer.clear(true, true, true);
 	}
 
 	_isGroupSource() {
@@ -443,8 +526,68 @@ export class TreeTagTool extends EventDispatcher {
 		}
 	}
 
+	_hasVisibleTags() {
+		for (const tag of this.tags.values()) {
+			if (tag.visible) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	_getClipSpheres() {
+		return (this.viewer.scene.volumes ?? []).filter((volume) => volume instanceof SphereVolume);
+	}
+
+	_renderOcclusionTarget(camera) {
+		const visiblePointclouds = this._getVisiblePointclouds();
+		const clipSpheres = this._getClipSpheres();
+
+		this._clearRenderTarget(this.occlusionRenderTarget);
+		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, this.occlusionRenderTarget, {
+			clipSpheres,
+			pointclouds: visiblePointclouds,
+		});
+		this.renderer.render(this.viewer.scene.scene, camera, this.occlusionRenderTarget);
+	}
+
+	_renderTagTarget(camera) {
+		this._clearRenderTarget(this.tagRenderTarget);
+		this.renderer.render(this.scene, camera, this.tagRenderTarget);
+	}
+
 	render() {
-		this.renderer.render(this.scene, this.viewer.scene.getActiveCamera());
+		if (!this._isGroupSource() || this.tags.size === 0 || !this._hasVisibleTags()) {
+			return;
+		}
+
+		const camera = this.viewer.scene.getActiveCamera();
+		this.renderer.getSize(_renderSize);
+		this._ensureRenderTargets(_renderSize.x, _renderSize.y);
+
+		const previousTarget = typeof this.renderer.getRenderTarget === "function"
+			? this.renderer.getRenderTarget()
+			: null;
+
+		// 方案 4：先离屏生成遮挡深度和标签颜色/深度，再统一走最终屏幕合成。
+		this._renderOcclusionTarget(camera);
+		this._renderTagTarget(camera);
+
+		if (typeof this.renderer.setRenderTarget === "function") {
+			this.renderer.setRenderTarget(previousTarget ?? null);
+		}
+
+		this.compositeMaterial.uniforms.uTagColor.value = this.tagRenderTarget.texture;
+		this.compositeMaterial.uniforms.uTagDepth.value = this.tagRenderTarget.depthTexture;
+		this.compositeMaterial.uniforms.uOcclusionDepth.value = this.occlusionRenderTarget.depthTexture;
+
+		if (previousTarget) {
+			Utils.screenPass.render(this.renderer, this.compositeMaterial, previousTarget);
+			return;
+		}
+
+		Utils.screenPass.render(this.renderer, this.compositeMaterial);
 	}
 
 	/**
@@ -506,5 +649,10 @@ export class TreeTagTool extends EventDispatcher {
 		}
 		this.tags.clear();
 		this.highlightedKeys = [];
+		this.tagRenderTarget?.dispose?.();
+		this.occlusionRenderTarget?.dispose?.();
+		this.tagRenderTarget = null;
+		this.occlusionRenderTarget = null;
+		this.compositeMaterial?.dispose?.();
 	}
 }

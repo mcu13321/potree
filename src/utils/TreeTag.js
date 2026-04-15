@@ -1,9 +1,13 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
 
-const LABEL_FONT_SIZE_PX = 64;
-const LABEL_PADDING_X_PX = 28;
+const LABEL_FONT_SIZE_PX = 36;
+const LABEL_PADDING_X_PX = 24;
 const LABEL_PADDING_Y_PX = 18;
-const LABEL_BORDER_RADIUS_PX = 24;
+const LABEL_BORDER_RADIUS_PX = 22;
+const LABEL_HIGHLIGHT_BACKGROUND = "#9f8ef4ff";
+const LABEL_HIGHLIGHT_TEXT_COLOR = "#ffffff";
+const LABEL_ALPHA_TEST = 0.01;
+const LABEL_DIMMED_OPACITY = 0.5;
 
 function nextPowerOfTwo(value) {
 	return Math.pow(2, Math.ceil(Math.log2(Math.max(1, value))));
@@ -42,8 +46,11 @@ export class TreeTag extends THREE.Sprite {
 		const material = new THREE.SpriteMaterial({
 			map: texture,
 			transparent: true,
-			depthTest: false,
-			depthWrite: false,
+			// 标签改为先渲染到独立 RT，再参与最终合成，因此这里需要写入自身深度。
+			depthTest: true,
+			depthWrite: true,
+			// 透明像素需要在 sprite shader 中直接丢弃，避免透明边缘把深度也写进 RT。
+			alphaTest: LABEL_ALPHA_TEST,
 			sizeAttenuation: true,
 		});
 
@@ -92,7 +99,7 @@ export class TreeTag extends THREE.Sprite {
 	_redraw() {
 		const canvas = this.texture.image;
 		const context = canvas.getContext("2d");
-		const font = `bold ${LABEL_FONT_SIZE_PX}px Arial, Helvetica, sans-serif`;
+		const font = `${LABEL_FONT_SIZE_PX}px Arial, Helvetica, sans-serif`;
 
 		if (!context) {
 			// 测试环境下 jsdom 可能未实现 2D canvas，这里退化为仅设置贴图尺寸，避免影响运行时行为。
@@ -123,7 +130,8 @@ export class TreeTag extends THREE.Sprite {
 		const offsetX = (canvas.width - contentWidth) / 2;
 		const offsetY = (canvas.height - contentHeight) / 2;
 
-		context.fillStyle = this.isHighlighted ? "rgba(0, 255, 0, 1)" : "rgba(204, 204, 204, 0.45)";
+		// 非高亮直接沿用高亮样式，只通过降低整体透明度区分状态。
+		context.globalAlpha = this.isHighlighted ? 1.0 : LABEL_DIMMED_OPACITY;
 		drawRoundedRect(
 			context,
 			offsetX,
@@ -132,14 +140,15 @@ export class TreeTag extends THREE.Sprite {
 			contentHeight,
 			LABEL_BORDER_RADIUS_PX,
 		);
+		context.fillStyle = LABEL_HIGHLIGHT_BACKGROUND;
 		context.fill();
-
-		context.fillStyle = "#000000";
+		context.fillStyle = LABEL_HIGHLIGHT_TEXT_COLOR;
 		context.fillText(
 			this.labelText,
 			canvas.width / 2,
 			canvas.height / 2,
 		);
+		context.globalAlpha = 1;
 
 		this.texture.needsUpdate = true;
 	}
