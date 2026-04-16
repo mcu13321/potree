@@ -549,12 +549,14 @@ export class TreeTagTool extends EventDispatcher {
 			clipSpheres,
 			pointclouds: visiblePointclouds,
 		});
-		this.renderer.render(this.viewer.scene.scene, camera, this.occlusionRenderTarget);
+		this.renderer.setRenderTarget(this.occlusionRenderTarget);
+		this.renderer.render(this.viewer.scene.scene, camera);
 	}
 
 	_renderTagTarget(camera) {
 		this._clearRenderTarget(this.tagRenderTarget);
-		this.renderer.render(this.scene, camera, this.tagRenderTarget);
+		this.renderer.setRenderTarget(this.tagRenderTarget);
+		this.renderer.render(this.scene, camera);
 	}
 
 	render() {
