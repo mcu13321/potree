@@ -508,6 +508,10 @@ export class Viewer extends EventDispatcher{
 		
 	}
 
+	setPauseRender (value) {
+		this.pauseRender = value;
+	}
+
 	getMinNodeSize () {
 		return this.minNodeSize;
 	};
