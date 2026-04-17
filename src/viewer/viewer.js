@@ -59,6 +59,7 @@ export class Viewer extends EventDispatcher{
 		this.renderArea = domElement;
 		this.guiLoaded = false;
 		this.guiLoadTasks = [];
+		this.pauseRender = false;
 
 		this.onVrListeners = [];
 
@@ -2405,6 +2406,9 @@ export class Viewer extends EventDispatcher{
 	}
 
 	loop(timestamp){
+		if (this.pauseRender && isGroupPointcloudSource(this)) {
+			return;
+		}
 
 		if(this.stats){
 			this.stats.begin();
