@@ -1,4 +1,3 @@
-
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {ClipTask, ClipMethod, CameraMode, LengthUnits, ElevationGradientRepeat} from "../defines.js";
 import {Renderer} from "../PotreeRenderer.js";
@@ -46,10 +45,17 @@ import {VRControls} from "../navigation/VRControls.js";
 import { EventDispatcher } from "../EventDispatcher.js";
 import { ClassificationScheme } from "../materials/ClassificationScheme.js";
 import { VRButton } from '../../libs/three.js/extra/VRButton.js';
+import {FJDCameraControls, ensureFJDCameraControlsInstalled} from "../FJDCameraControlsHost.js";
+import {FJDPotreeControlsAdapter} from "./FJDPotreeControlsAdapter.js";
 
 import JSON5 from "../../libs/json5-2.1.3/json5.mjs";
 
 import CameraControls from "../../libs/camera-controls/dist/camera-controls.module.js";
+
+// Potree 内部继续使用自带 three，并在 viewer 初始化前安装到 FJD controls core。
+// viewer 既可能通过 Potree 总入口使用，也可能被宿主直接单独引入。
+// 因此这里主动确保独立 controls 包已绑定到 Potree 自带的 THREE。
+ensureFJDCameraControlsInstalled();
 
 export class Viewer extends EventDispatcher{
 	
@@ -360,14 +366,23 @@ export class Viewer extends EventDispatcher{
 		this.measuringTool = new MeasuringTool(this);
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);
-		// 仅在启用 cameraControls 且测量插入激活时，才让单指轻点优先走测量。
-		this.cameraControls.touchTapThreshold = 8;
-		this.cameraControls.shouldCaptureSingleTouch = () => {
-			return this.controls === this.cameraControls && !!this.measuringTool?.eventMeasurement;
-		};
 		this.treeTagTool = new TreeTagTool(this);
 		this.rectangleSVGTool = new RectangleSVGTool(this);
 		this.polygonSVGTool = new PolygonSVGTool(this);
+		
+		// 独立实例化 FJD 控件核心；核心层只绑定活动相机，Potree scene 适配交给 adapter。
+		this.fjdCameraControls = new FJDCameraControls(this.scene.getActiveCamera());
+		this.fjdCameraControls.enabled = false;
+		this.configureControlsCapabilities(this.fjdCameraControls, {
+			isDomDrivenControls: true,
+			drivesCameraDirectly: true,
+			supportsSetCamera: true,
+			usesRigidTopViewFit: true,
+		});
+		this.applyControlsHostPolicy(this.fjdCameraControls);
+		
+		// fjd 相机控件视觉辅助器只负责生命周期渲染，绑定外部传入的 controls
+		this.fjdPotreeControlsAdapter = new FJDPotreeControlsAdapter(this, this.fjdCameraControls);
 
 		}catch(e){
 			this.onCrash(e);
@@ -422,6 +437,81 @@ export class Viewer extends EventDispatcher{
 	// Viewer API
 	// ------------------------------------------------------------------------------------
 
+	applyControlsHostPolicy(controls){
+		if(!controls){
+			return;
+		}
+
+		// 把宿主层的单指轻触策略统一下发给所有兼容 controls，避免只对旧 cameraControls 生效。
+		controls.touchTapThreshold = 8;
+		controls.shouldCaptureSingleTouch = () => {
+			return this.controls === controls && !!this.measuringTool?.eventMeasurement;
+		};
+	}
+
+	// 给不同 controls 实例打上宿主分发所需的能力标记，避免 viewer 里继续写对象身份判断。
+	configureControlsCapabilities(controls, capabilities = {}){
+		if(!controls){
+			return;
+		}
+
+		Object.assign(controls, capabilities);
+	}
+
+	// 判断当前 controls 是否由自身直接绑定 DOM 事件。
+	isDomDrivenControls(controls){
+		return controls?.isDomDrivenControls === true;
+	}
+
+	// 判断当前 controls 是否直接驱动 three.js camera，而不是经由 scene.view 间接同步。
+	drivesCameraDirectly(controls){
+		return controls?.drivesCameraDirectly === true;
+	}
+
+	// 判断当前 controls 是否仍使用旧的 scene 同步协议。
+	supportsSceneContext(controls){
+		return controls?.supportsSetScene === true;
+	}
+
+	// 给 controls 同步宿主当前场景上下文；优先走 setCamera，其次只对显式声明旧协议的 controls 调 setScene。
+	syncControlsContext(controls, scene = this.scene){
+		if(!controls || !scene){
+			return;
+		}
+
+		const activeCamera = scene.getActiveCamera?.();
+		if(controls.supportsSetCamera === true && typeof controls.setCamera === "function" && activeCamera){
+			controls.setCamera(activeCamera);
+			return;
+		}
+
+		if(this.supportsSceneContext(controls) && typeof controls.setScene === "function"){
+			controls.setScene(scene);
+		}
+	}
+
+	// 在切换 controls 前触发宿主激活钩子，让集成层同步上下文与临时状态。
+	runControlsActivationHook(nextControls, previousControls){
+		if(!nextControls || nextControls === previousControls){
+			return;
+		}
+
+		if(typeof nextControls.onHostControlsWillActivate === "function"){
+			nextControls.onHostControlsWillActivate(this, previousControls);
+		}
+	}
+
+	// 在切换 controls 后触发宿主失活钩子，让集成层清理 helper 等附加资源。
+	runControlsDeactivationHook(previousControls, nextControls){
+		if(!previousControls || previousControls === nextControls){
+			return;
+		}
+
+		if(typeof previousControls.onHostControlsDidDeactivate === "function"){
+			previousControls.onHostControlsDidDeactivate(this, nextControls);
+		}
+	}
+
 	setScene (scene) {
 		if (scene === this.scene) {
 			return;
@@ -468,7 +558,13 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setControls(controls){
-		if (controls == this.cameraControls) {
+		const previousControls = this.controls;
+		// viewer 不再识别 FJD 身份，统一改由 controls 自己声明宿主生命周期钩子。
+		this.runControlsActivationHook(controls, previousControls);
+
+		const isDomDrivenControls = this.isDomDrivenControls(controls);
+
+		if (isDomDrivenControls) {
 			if (controls !== this.controls) {
 				if (this.controls) {
 					this.controls.enabled = false;
@@ -479,10 +575,12 @@ export class Viewer extends EventDispatcher{
 				
 				this.controls.connect(this.renderArea);
 			}
+
+			this.runControlsDeactivationHook(previousControls, controls);
 			return;
 		} else {
-			if (this.controls == this.cameraControls) {
-				this.cameraControls.disconnect()
+			if (this.isDomDrivenControls(this.controls)) {
+				this.controls.disconnect?.();
 			}
 		}
 
@@ -496,6 +594,8 @@ export class Viewer extends EventDispatcher{
 			this.controls.enabled = true;
 			this.inputHandler.addInputListener(this.controls);
 		}
+
+		this.runControlsDeactivationHook(previousControls, controls);
 	}
 
 	getControls () {
@@ -1063,22 +1163,36 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setTopView4CameraControls(animation = true){
+		const activeControls =
+			this.controls?.usesRigidTopViewFit === true
+				? this.controls
+				: this.cameraControls;
 		const visiblePointclouds = this.scene.pointclouds.filter(
 			(pc) => pc.visible !== false
 		);
 		const pointcloudsForBox =
 			visiblePointclouds.length > 0 ? visiblePointclouds : this.scene.pointclouds;
 		let box = this.getBoundingBox(pointcloudsForBox );
-		if (this.cameraControls.camera.isPerspectiveCamera) {
-			this.cameraControls.camera.zoom = 1;
-		} 
+		if (activeControls?.camera?.isPerspectiveCamera) {
+			activeControls.camera.zoom = 1;
+		}
 		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
-		this.cameraControls.normalizeRotations().reset(animation)
-		this.cameraControls.fitToBox(box, animation);
-		this.cameraControls.rotateTo(0, 0, animation);
+
+		if (
+			activeControls?.usesRigidTopViewFit === true &&
+			typeof activeControls.fitToTopViewBox === "function"
+		) {
+			// fjd-controls 走刚体相机模型，直接切到包围盒顶视图位姿。
+			activeControls.fitToTopViewBox(box, animation);
+		} else {
+			// 旧 cameraControls 继续沿用原有 top-view 链路，避免影响现有项目。
+			activeControls.normalizeRotations().reset(animation);
+			activeControls.fitToBox(box, animation);
+			activeControls.rotateTo(0, 0, animation);
+		}
 
 		// 记录 top view 结束位姿下每个点云的基准距离，供多点云 XRAY 动态透明度使用。
-		const cameraPosition = this.cameraControls.getPosition(new THREE.Vector3(), true);
+		const cameraPosition = activeControls.getPosition(new THREE.Vector3(), true);
 		for (const pointcloud of pointcloudsForBox) {
 			const pointcloudBox = this.scene.getBoundingBox([pointcloud]);
 			const center = pointcloudBox.getCenter(new THREE.Vector3());
@@ -1087,13 +1201,102 @@ export class Viewer extends EventDispatcher{
 		}
 	};
 
-	setFromR3fCameraControls(){
-		const r3fCameraControlsTarget = window.parent.r3fCameraControls.getTarget();
-		const r3fCameraControlsSpherical = window.parent.r3fCameraControls.getSpherical();
-		
-		this.cameraControls.moveTo(r3fCameraControlsTarget.x, r3fCameraControlsTarget.y, r3fCameraControlsTarget.z, true);
-		this.cameraControls.rotateTo(r3fCameraControlsSpherical.theta, r3fCameraControlsSpherical.phi, true);
-        this.cameraControls.dollyTo(r3fCameraControlsSpherical.radius, true);
+	// 判断某个 controls 是否可以读取当前位姿。
+	// R3F -> Potree 桥接统一按 position + target 读取，不再依赖 spherical 语义。
+	canReadExternalControlsPose(controls){
+		return !!controls &&
+			typeof controls.getTarget === "function" &&
+			typeof controls.getPosition === "function";
+	}
+
+	// 统一克隆桥接用的三维向量。
+	// 除了兼容 Vector3，也兼容只暴露 x/y/z 的轻量对象，便于外部宿主桥接。
+	cloneExternalPoseVector(value){
+		if(value?.isVector3 === true || typeof value?.clone === "function"){
+			return value.clone();
+		}
+
+		return new THREE.Vector3(
+			Number(value?.x) || 0,
+			Number(value?.y) || 0,
+			Number(value?.z) || 0,
+		);
+	}
+
+	// 从外部 controls 读取统一位姿。
+	// 正交相机额外携带 zoom，透视相机下 zoom 统一记为 null。
+	readExternalControlsPose(controls){
+		if(!this.canReadExternalControlsPose(controls)){
+			return null;
+		}
+
+		const position = controls.getPosition(new THREE.Vector3(), true);
+		const target = controls.getTarget(new THREE.Vector3(), true);
+
+		return {
+			position: this.cloneExternalPoseVector(position),
+			target: this.cloneExternalPoseVector(target),
+			zoom: controls.camera?.isOrthographicCamera ? controls.camera.zoom : null,
+		};
+	}
+
+	// 判断某个 controls 是否具备通过 position + target 接收外部位姿的能力。
+	canApplyExternalControlsPose(controls){
+		return !!controls && typeof controls.setLookAt === "function";
+	}
+
+	// 把统一位姿应用到目标 controls。
+	// 若目标 controls 是正交相机，且支持 zoomTo，则额外同步 zoom。
+	applyExternalControlsPose(controls, pose, animation = true){
+		if(!this.canApplyExternalControlsPose(controls) || !pose){
+			return false;
+		}
+
+		controls.setLookAt(
+			pose.position.x,
+			pose.position.y,
+			pose.position.z,
+			pose.target.x,
+			pose.target.y,
+			pose.target.z,
+			animation,
+		);
+
+		if(
+			controls.camera?.isOrthographicCamera &&
+			Number.isFinite(pose.zoom) &&
+			typeof controls.zoomTo === "function"
+		){
+			controls.zoomTo(pose.zoom, animation);
+		}
+
+		return true;
+	}
+
+	// 选择接收 R3F controls 状态的目标 controls。
+	// 优先使用当前激活且兼容的 controls；若当前 controls 不支持，再回退到旧 cameraControls。
+	resolveExternalCameraControlsBridgeTarget(){
+		if(this.canApplyExternalControlsPose(this.controls)){
+			return this.controls;
+		}
+
+		if(this.canApplyExternalControlsPose(this.cameraControls)){
+			return this.cameraControls;
+		}
+
+		return null;
+	}
+
+	// 从外部 controls 实例同步位姿。
+	// 与 R3F 侧的 cameraPoseBridge 保持一致，统一同步 position + target + zoom。
+	setFromR3fCameraControls(sourceControls = window.parent?.r3fCameraControls, animation = true){
+		const targetControls = this.resolveExternalCameraControlsBridgeTarget();
+		const pose = this.readExternalControlsPose(sourceControls);
+		if(!pose || !targetControls){
+			return false;
+		}
+
+		return this.applyExternalControlsPose(targetControls, pose, animation);
 	}
 	
 	setBottomView(){
@@ -1133,9 +1336,6 @@ export class Viewer extends EventDispatcher{
 
 	flipYZ () {
 		this.isFlipYZ = !this.isFlipYZ;
-
-		// TODO flipyz
-		console.log('TODO');
 	}
 	
 	setCameraMode(mode){
@@ -1276,6 +1476,9 @@ export class Viewer extends EventDispatcher{
 		{ // create FIRST PERSON CONTROLS
 			this.fpControls = new FirstPersonControls(this);
 			this.fpControls.enabled = false;
+			this.configureControlsCapabilities(this.fpControls, {
+				supportsSetScene: true,
+			});
 			this.fpControls.addEventListener('start', this.disableAnnotations.bind(this));
 			this.fpControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
@@ -1293,6 +1496,9 @@ export class Viewer extends EventDispatcher{
 		{ // create ORBIT CONTROLS
 			this.orbitControls = new OrbitControls(this);
 			this.orbitControls.enabled = false;
+			this.configureControlsCapabilities(this.orbitControls, {
+				supportsSetScene: true,
+			});
 			this.orbitControls.addEventListener('start', this.disableAnnotations.bind(this));
 			this.orbitControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
@@ -1300,6 +1506,9 @@ export class Viewer extends EventDispatcher{
 		{ // create EARTH CONTROLS
 			this.earthControls = new EarthControls(this);
 			this.earthControls.enabled = false;
+			this.configureControlsCapabilities(this.earthControls, {
+				supportsSetScene: true,
+			});
 			this.earthControls.addEventListener('start', this.disableAnnotations.bind(this));
 			this.earthControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
@@ -1307,6 +1516,9 @@ export class Viewer extends EventDispatcher{
 		{ // create DEVICE ORIENTATION CONTROLS
 			this.deviceControls = new DeviceOrientationControls(this);
 			this.deviceControls.enabled = false;
+			this.configureControlsCapabilities(this.deviceControls, {
+				supportsSetScene: true,
+			});
 			this.deviceControls.addEventListener('start', this.disableAnnotations.bind(this));
 			this.deviceControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
@@ -1314,6 +1526,9 @@ export class Viewer extends EventDispatcher{
 		{ // create VR CONTROLS
 			this.vrControls = new VRControls(this);
 			this.vrControls.enabled = false;
+			this.configureControlsCapabilities(this.vrControls, {
+				supportsSetScene: true,
+			});
 			this.vrControls.addEventListener('start', this.disableAnnotations.bind(this));
 			this.vrControls.addEventListener('end', this.enableAnnotations.bind(this));
 		}
@@ -1322,6 +1537,14 @@ export class Viewer extends EventDispatcher{
 			CameraControls.install( { THREE: THREE } );
 			this.cameraControls = new CameraControls(this.scene);
 			this.cameraControls.enabled = false;
+			this.configureControlsCapabilities(this.cameraControls, {
+				isDomDrivenControls: true,
+				drivesCameraDirectly: true,
+				supportsSetCamera: false,
+				supportsSetScene: false,
+				usesRigidTopViewFit: false,
+			});
+			this.applyControlsHostPolicy(this.cameraControls);
 		}
 	};
 
@@ -1940,17 +2163,18 @@ export class Viewer extends EventDispatcher{
 		this.scene.cameraP.fov = this.fov;
 		
 		let controls = this.getControls();
-		if (controls === this.cameraControls) {
-			this.controls.setScene(scene);
-			this.controls.update(delta);
+		if (this.drivesCameraDirectly(controls)) {
+			// fjd-camera-controls 与 cameraControls 一样直接驱动相机，不能再被 scene.view 覆盖。
+			this.syncControlsContext(controls, scene);
+			controls.update(delta);
 		}else if (controls === this.deviceControls) {
-			this.controls.setScene(scene);
-			this.controls.update(delta);
+			this.syncControlsContext(controls, scene);
+			controls.update(delta);
 
 			this.scene.cameraP.position.copy(scene.view.position);
 			this.scene.cameraO.position.copy(scene.view.position);
 		} else if (controls !== null) {
-			controls.setScene(scene);
+			this.syncControlsContext(controls, scene);
 			controls.update(delta);
 
 			if(typeof debugDisabled === "undefined" ){

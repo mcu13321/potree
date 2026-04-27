@@ -78,7 +78,10 @@ export {FirstPersonControls} from "./navigation/FirstPersonControls.js";
 export {EarthControls} from "./navigation/EarthControls.js";
 export {DeviceOrientationControls} from "./navigation/DeviceOrientationControls.js";
 export {VRControls} from "./navigation/VRControls.js";
+// 仅导出 FJD 相机控件 core；Potree 适配器保持内部使用，不对外暴露。
+export {FJDCameraControls} from "./FJDCameraControlsHost.js";
 
+import {ensureFJDCameraControlsInstalled} from "./FJDCameraControlsHost.js";
 import "./extensions/OrthographicCamera.js";
 import "./extensions/PerspectiveCamera.js";
 import "./extensions/Ray.js";
@@ -89,6 +92,10 @@ import {POCLoader} from "./loader/POCLoader.js";
 import {CopcLoader, EptLoader} from "./loader/EptLoader.js";
 import {PointCloudOctree} from "./PointCloudOctree.js";
 import {WorkerPool} from "./WorkerPool.js";
+
+// Potree 模块入口默认把内部 three 注册给 FJD controls，确保直接从 Potree.js 引用时可立即工作。
+// Potree 总入口被直接引用时，也要确保独立 controls 包已经完成 THREE 安装。
+ensureFJDCameraControlsInstalled();
 
 export const workerPool = new WorkerPool();
 
