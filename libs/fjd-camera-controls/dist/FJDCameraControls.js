@@ -1,5 +1,3 @@
-// 该文件由独立项目 fjd-camera-controls 的打包产物同步到 Potree 的 libs 目录。
-// Potree 侧直接引用这个单文件版本，不再通过 package.json 依赖安装。
 // src/FJDCameraControlsTHREE.js
 var installedTHREE = null;
 function assertValidTHREE(THREE) {
@@ -285,6 +283,10 @@ var FJDCameraControls = class extends EventDispatcher {
     this._zoomEnd = this._zoom;
     this._orbitPoint = options.orbitPoint?.clone?.() ?? this._camera.position.clone();
     this._orbitPointCurrent = this._orbitPoint.clone();
+    this._worldUp = this._resolveWorldUp(options.worldUp, WORLD_UP);
+    if (options.worldUp) {
+      this._camera.up.copy(this._worldUp);
+    }
     this._enabled = true;
     this.currentAction = ACTION.NONE;
     this.azimuthRotateSpeed = options.azimuthRotateSpeed ?? 1;
@@ -356,6 +358,7 @@ var FJDCameraControls = class extends EventDispatcher {
     this._quaternion0 = this._quaternion.clone();
     this._zoom0 = this._zoom;
     this._orbitPoint0 = this._orbitPointCurrent.clone();
+    this._worldUp0 = this._worldUp.clone();
     this._focalOffset = new THREEProxy.Vector3();
     this._focalOffsetEnd = new THREEProxy.Vector3();
     this._focalOffset0 = new THREEProxy.Vector3();
@@ -373,6 +376,7 @@ var FJDCameraControls = class extends EventDispatcher {
     this._tmpDirection3 = new THREEProxy.Vector3();
     this._tmpSpherical = new THREEProxy.Spherical();
     this._tmpTouchCenter = new THREEProxy.Vector2();
+    this._tmpMatrix = new THREEProxy.Matrix4();
     this._onPointerDown = this._handlePointerDown.bind(this);
     this._onPointerMove = this._handlePointerMove.bind(this);
     this._onPointerUp = this._handlePointerUp.bind(this);
@@ -433,6 +437,20 @@ var FJDCameraControls = class extends EventDispatcher {
       minZoom,
       maxZoom
     );
+  }
+  // 解析并归一化实例级 up 轴，非法输入统一回退到默认世界上轴。
+  _resolveWorldUp(value, fallback = WORLD_UP, out = new THREEProxy.Vector3()) {
+    if (value?.isVector3) {
+      out.copy(value);
+    } else if (Array.isArray(value) && value.length >= 3) {
+      out.fromArray(value);
+    } else {
+      out.copy(fallback);
+    }
+    if (out.lengthSq() <= Number.EPSILON) {
+      out.copy(fallback);
+    }
+    return out.normalize();
   }
   // 把正交相机下的屏幕像素位移换算为世界空间平移量。
   _getOrthographicPanOffset(deltaX, deltaY, out = this._tmpOffset) {
@@ -584,7 +602,7 @@ var FJDCameraControls = class extends EventDispatcher {
   getSpherical(out = new THREEProxy.Spherical(), receiveEndValue = true) {
     const position = receiveEndValue ? this._positionEnd : this._position;
     const pivot = receiveEndValue ? this._orbitPoint : this._orbitPointCurrent;
-    return computeSphericalFromOrbitPose(position, pivot, WORLD_UP, out);
+    return computeSphericalFromOrbitPose(position, pivot, this._worldUp, out);
   }
   // 估算透视相机装下球体所需的最小视距。
   getDistanceToFitSphere(radius) {
@@ -618,17 +636,50 @@ var FJDCameraControls = class extends EventDispatcher {
   // 把包围盒投影到当前相机局部坐标系，供 fit 逻辑复用。
   // 返回投影后的宽、高、深三个尺寸。
   _computeProjectedBoundsSize(bounds, out = this._tmpPosition) {
+    return this._computeBoundsSizeInBasis(
+      bounds,
+      getWorldRightAxis(this._quaternionEnd, this._tmpDirection),
+      getWorldCameraUpAxis(this._quaternionEnd, this._tmpDirection2),
+      this._tmpDirection3.set(0, 0, 1).applyQuaternion(this._quaternionEnd).normalize(),
+      out
+    );
+  }
+  // 把包围盒投影到指定正交基，返回该基下的宽、高、深。
+  _computeBoundsSizeInBasis(bounds, rightAxis, upAxis, backAxis, out = this._tmpPosition) {
     const boundsSize = bounds.getSize(this._tmpSize);
     const halfX = boundsSize.x * 0.5;
     const halfY = boundsSize.y * 0.5;
     const halfZ = boundsSize.z * 0.5;
-    const rightAxis = getWorldRightAxis(this._quaternionEnd, this._tmpDirection);
-    const upAxis = getWorldCameraUpAxis(this._quaternionEnd, this._tmpDirection2);
-    const backAxis = this._tmpDirection3.set(0, 0, 1).applyQuaternion(this._quaternionEnd).normalize();
     const projectedWidth = 2 * (Math.abs(rightAxis.x) * halfX + Math.abs(rightAxis.y) * halfY + Math.abs(rightAxis.z) * halfZ);
     const projectedHeight = 2 * (Math.abs(upAxis.x) * halfX + Math.abs(upAxis.y) * halfY + Math.abs(upAxis.z) * halfZ);
     const projectedDepth = 2 * (Math.abs(backAxis.x) * halfX + Math.abs(backAxis.y) * halfY + Math.abs(backAxis.z) * halfZ);
     return out.set(projectedWidth, projectedHeight, projectedDepth);
+  }
+  // 选择一个与当前 worldUp 垂直的稳定屏幕上轴，避免顶视图 lookAt 在任意 up 下退化。
+  // 为顶视图选择固定且稳定的屏幕上方向，避免结果继承当前视图的平面内旋转角。
+  _resolveTopViewScreenUp(out = this._tmpDirection2) {
+    const candidateAxes = [
+      [0, 1, 0],
+      [0, 0, 1],
+      [1, 0, 0]
+    ];
+    for (const [x, y, z] of candidateAxes) {
+      out.set(x, y, z);
+      out.addScaledVector(this._worldUp, -out.dot(this._worldUp));
+      if (out.lengthSq() > Number.EPSILON) {
+        return out.normalize();
+      }
+    }
+    return out.set(0, 1, 0);
+  }
+  // 为顶视图构造相机局部 X/Y/Z 在世界空间中的正交基。
+  // 为顶视图构造相机局部 X/Y/Z 在世界空间中的正交基，并固定屏幕内朝向。
+  _resolveTopViewBasis(outRight = this._tmpDirection, outUp = this._tmpDirection2, outBack = this._tmpDirection3) {
+    outBack.copy(this._worldUp).normalize();
+    this._resolveTopViewScreenUp(outUp);
+    outRight.crossVectors(outUp, outBack).normalize();
+    outUp.crossVectors(outBack, outRight).normalize();
+    return { right: outRight, up: outUp, back: outBack };
   }
   // 统一计算正交相机 fit 时的目标 zoom。
   // cover 为 true 时使用覆盖策略，否则使用完整包含策略。
@@ -674,7 +725,7 @@ var FJDCameraControls = class extends EventDispatcher {
       const nextQuaternion = computeLookAtQuaternion(
         nextPosition,
         nextTarget,
-        WORLD_UP,
+        this._worldUp,
         this._tmpQuaternion
       );
       return this._setPose(
@@ -740,7 +791,7 @@ var FJDCameraControls = class extends EventDispatcher {
     const nextQuaternion = computeLookAtQuaternion(
       nextPosition,
       nextOrbitPoint,
-      WORLD_UP,
+      this._worldUp,
       this._tmpQuaternion
     );
     return this._setPose(nextPosition, nextQuaternion, nextOrbitPoint, enableTransition);
@@ -752,13 +803,19 @@ var FJDCameraControls = class extends EventDispatcher {
     if (!box || box.isEmpty?.()) {
       return Promise.resolve();
     }
-    const size = box.getSize(this._tmpOffset);
     const center = box.getCenter(this._tmpPosition2);
     const camera = this._camera;
+    const { right, up, back } = this._resolveTopViewBasis(
+      this._tmpDirection,
+      this._tmpDirection2,
+      this._tmpDirection3
+    );
+    const projectedSize = this._computeBoundsSizeInBasis(box, right, up, back, this._tmpSize);
+    const topQuaternion = this._tmpQuaternion.setFromRotationMatrix(this._tmpMatrix.makeBasis(right, up, back)).normalize();
     if (camera.isPerspectiveCamera) {
       const targetZoom = 1;
-      const halfHeight = Math.max(size.y * 0.5, Number.EPSILON);
-      const halfWidth = Math.max(size.x * 0.5, Number.EPSILON);
+      const halfHeight = Math.max(projectedSize.y * 0.5, Number.EPSILON);
+      const halfWidth = Math.max(projectedSize.x * 0.5, Number.EPSILON);
       const verticalFov = degToRad(
         camera.getEffectiveFOV ? camera.getEffectiveFOV() : camera.fov
       );
@@ -768,9 +825,10 @@ var FJDCameraControls = class extends EventDispatcher {
       const distanceForHeight = halfHeight / Math.tan(halfVerticalFov);
       const distanceForWidth = halfWidth / Math.tan(halfHorizontalFov);
       const topDistance = Math.max(distanceForHeight, distanceForWidth) * TOP_VIEW_PADDING_FACTOR;
+      const targetDistance = projectedSize.z * 0.5 + topDistance;
       return this._setPose(
-        this._tmpPosition.set(center.x, center.y, box.max.z + topDistance),
-        this._tmpQuaternion.identity(),
+        this._tmpPosition.copy(center).add(this._tmpOffset.copy(back).multiplyScalar(targetDistance)),
+        topQuaternion,
         center,
         enableTransition,
         targetZoom
@@ -779,12 +837,13 @@ var FJDCameraControls = class extends EventDispatcher {
     if (camera.isOrthographicCamera) {
       const viewWidth = Math.max(camera.right - camera.left, Number.EPSILON);
       const viewHeight = Math.max(camera.top - camera.bottom, Number.EPSILON);
-      const widthZoom = viewWidth / Math.max(size.x * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
-      const heightZoom = viewHeight / Math.max(size.y * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
+      const widthZoom = viewWidth / Math.max(projectedSize.x * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
+      const heightZoom = viewHeight / Math.max(projectedSize.y * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
       const targetZoom = this._sanitizeZoom(Math.min(widthZoom, heightZoom));
+      const targetDistance = projectedSize.z * 0.5 + Math.max(projectedSize.z, 1);
       return this._setPose(
-        this._tmpPosition.set(center.x, center.y, box.max.z + Math.max(size.z, 1)),
-        this._tmpQuaternion.identity(),
+        this._tmpPosition.copy(center).add(this._tmpOffset.copy(back).multiplyScalar(targetDistance)),
+        topQuaternion,
         center,
         enableTransition,
         targetZoom
@@ -823,7 +882,7 @@ var FJDCameraControls = class extends EventDispatcher {
       const nextQuaternion = computeLookAtQuaternion(
         nextPosition,
         nextTarget,
-        WORLD_UP,
+        this._worldUp,
         this._tmpQuaternion
       );
       return this._setPose(
@@ -862,7 +921,7 @@ var FJDCameraControls = class extends EventDispatcher {
       theta,
       phi,
       this._quaternionEnd,
-      WORLD_UP,
+      this._worldUp,
       this._tmpQuaternion
     );
     rotateCameraPoseAroundPivot(
@@ -932,10 +991,13 @@ var FJDCameraControls = class extends EventDispatcher {
     this._quaternion0.copy(this._quaternion);
     this._zoom0 = this._zoom;
     this._orbitPoint0.copy(this._orbitPointCurrent);
+    this._worldUp0.copy(this._worldUp);
   }
   // 恢复到最近一次 saveState 保存的状态。
   reset(enableTransition = false) {
     this._cancelAnimationToCurrent();
+    this._worldUp.copy(this._worldUp0);
+    this._camera.up.copy(this._worldUp);
     return this._setPose(
       this._position0,
       this._quaternion0,
@@ -1390,7 +1452,7 @@ var FJDCameraControls = class extends EventDispatcher {
     const clampedPitch = clampPitchAngleDelta(
       pitch,
       this._quaternionEnd,
-      WORLD_UP,
+      this._worldUp,
       this.minPolarAngle,
       this.maxPolarAngle
     );
@@ -1402,7 +1464,7 @@ var FJDCameraControls = class extends EventDispatcher {
       yaw,
       pitch,
       this._quaternionEnd,
-      WORLD_UP,
+      this._worldUp,
       this._tmpQuaternion
     );
     rotateCameraPoseAroundPivot(
@@ -1577,7 +1639,7 @@ var FJDCameraControls = class extends EventDispatcher {
       clampedPhi,
       currentSpherical.radius,
       this._orbitPoint,
-      WORLD_UP,
+      this._worldUp,
       this._tmpPosition,
       this._tmpQuaternion
     );
@@ -1625,7 +1687,7 @@ var FJDCameraControls = class extends EventDispatcher {
     const nextQuaternion = computeLookAtQuaternion(
       nextPosition,
       this._orbitPoint,
-      WORLD_UP,
+      this._worldUp,
       this._tmpQuaternion
     );
     return this._setPose(nextPosition, nextQuaternion, this._orbitPoint, enableTransition);
@@ -1644,7 +1706,7 @@ var FJDCameraControls = class extends EventDispatcher {
   elevate(height, enableTransition = false) {
     const up = this._tmpOffset.copy(this._camera.up);
     if (up.lengthSq() <= Number.EPSILON) {
-      up.copy(WORLD_UP);
+      up.copy(this._worldUp);
     }
     up.normalize().multiplyScalar(height);
     return this.moveTo(
@@ -1748,11 +1810,13 @@ var FJDCameraControls = class extends EventDispatcher {
       position: this._positionEnd.toArray(),
       quaternion: this._quaternionEnd.toArray(),
       zoom: this._zoomEnd,
+      worldUp: this._worldUp.toArray(),
       focalOffset: this._focalOffsetEnd.toArray(),
       target0: this._orbitPoint0.toArray(),
       position0: this._position0.toArray(),
       quaternion0: this._quaternion0.toArray(),
       zoom0: this._zoom0,
+      worldUp0: this._worldUp0.toArray(),
       focalOffset0: this._focalOffset0.toArray()
     });
   }
@@ -1811,6 +1875,9 @@ var FJDCameraControls = class extends EventDispatcher {
     if (Number.isFinite(data.zoom0)) {
       this._zoom0 = this._sanitizeZoom(data.zoom0);
     }
+    if (Array.isArray(data.worldUp0) && data.worldUp0.length >= 3) {
+      this._resolveWorldUp(data.worldUp0, this._worldUp0, this._worldUp0);
+    }
     if (Array.isArray(data.focalOffset0) && data.focalOffset0.length >= 3) {
       this._focalOffset0.fromArray(data.focalOffset0);
     }
@@ -1818,12 +1885,16 @@ var FJDCameraControls = class extends EventDispatcher {
       this._focalOffsetEnd.fromArray(data.focalOffset);
       this._focalOffset.copy(this._focalOffsetEnd);
     }
+    if (Array.isArray(data.worldUp) && data.worldUp.length >= 3) {
+      this._resolveWorldUp(data.worldUp, this._worldUp, this._worldUp);
+      this._camera.up.copy(this._worldUp);
+    }
     const nextTarget = Array.isArray(data.target) && data.target.length >= 3 ? this._tmpOffset.fromArray(data.target) : this._tmpOffset.copy(this._orbitPoint);
     const nextPosition = Array.isArray(data.position) && data.position.length >= 3 ? this._tmpPosition.fromArray(data.position) : this._tmpPosition.copy(this._positionEnd);
     const nextQuaternion = Array.isArray(data.quaternion) && data.quaternion.length >= 4 ? this._tmpQuaternion.fromArray(data.quaternion).normalize() : computeLookAtQuaternion(
       nextPosition,
       nextTarget,
-      WORLD_UP,
+      this._worldUp,
       this._tmpQuaternion
     );
     const nextZoom = Number.isFinite(data.zoom) ? this._sanitizeZoom(data.zoom) : this._zoomEnd;
@@ -1910,11 +1981,65 @@ var FJDCameraControls = class extends EventDispatcher {
   normalizeRotations() {
     return this;
   }
-  // 兼容 camera-controls 的 camera.up 更新接口，当前保留空实现。
-  updateCameraUp() {
+  // 在保持世界位置和目标点不变的前提下，用当前 worldUp 重建相机朝向。
+  _rebuildQuaternionsForWorldUp() {
+    if (this._position.distanceToSquared(this._orbitPointCurrent) > Number.EPSILON) {
+      computeLookAtQuaternion(
+        this._position,
+        this._orbitPointCurrent,
+        this._worldUp,
+        this._quaternion
+      );
+    }
+    if (this._positionEnd.distanceToSquared(this._orbitPoint) > Number.EPSILON) {
+      computeLookAtQuaternion(
+        this._positionEnd,
+        this._orbitPoint,
+        this._worldUp,
+        this._quaternionEnd
+      );
+    }
   }
-  // 兼容 camera-controls 的应用 camera.up 接口，当前保留空实现。
+  // 兼容 camera-controls 的 camera.up 更新接口；同步实例级 up 轴并重新编码当前刚体位姿。
+  updateCameraUp() {
+    this._resolveWorldUp(this._camera.up, this._worldUp, this._worldUp);
+    this._camera.up.copy(this._worldUp);
+    this._rebuildQuaternionsForWorldUp();
+    this._applyPoseToCamera(this._position, this._quaternion, this._zoom);
+    return this;
+  }
+  // 兼容 camera-controls 的应用 camera.up 接口；先把 up 正交化到当前视线平面，再同步控制模型。
   applyCameraUp() {
+    const cameraDirection = this._tmpDirection.copy(this._orbitPointCurrent).sub(this._position);
+    if (cameraDirection.lengthSq() <= Number.EPSILON) {
+      return this.updateCameraUp();
+    }
+    cameraDirection.normalize();
+    const desiredUp = this._tmpDirection2.copy(this._camera.up);
+    if (desiredUp.lengthSq() <= Number.EPSILON) {
+      desiredUp.copy(this._worldUp);
+    }
+    desiredUp.normalize();
+    const side = this._tmpDirection3.crossVectors(cameraDirection, desiredUp);
+    if (side.lengthSq() <= Number.EPSILON) {
+      const absX = Math.abs(cameraDirection.x);
+      const absY = Math.abs(cameraDirection.y);
+      const absZ = Math.abs(cameraDirection.z);
+      if (absX <= absY && absX <= absZ) {
+        desiredUp.set(1, 0, 0);
+      } else if (absY <= absX && absY <= absZ) {
+        desiredUp.set(0, 1, 0);
+      } else {
+        desiredUp.set(0, 0, 1);
+      }
+      desiredUp.addScaledVector(cameraDirection, -desiredUp.dot(cameraDirection)).normalize();
+      side.crossVectors(cameraDirection, desiredUp);
+    }
+    if (side.lengthSq() > Number.EPSILON) {
+      this._camera.up.crossVectors(side.normalize(), cameraDirection).normalize();
+    }
+    this._camera.updateMatrixWorld(true);
+    return this.updateCameraUp();
   }
   // 解析 lerp 输入里的 position 或 spherical 字段。
   // 统一把不同状态格式转换为世界坐标位置。
@@ -1929,7 +2054,7 @@ var FJDCameraControls = class extends EventDispatcher {
         phi,
         radius,
         target,
-        WORLD_UP,
+        this._worldUp,
         out,
         this._tmpQuaternion
       );
