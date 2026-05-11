@@ -1419,11 +1419,39 @@ class CameraControls extends EventDispatcher {
         return this._camera;
     }
     set camera(camera) {
+        if (!camera || camera === this._camera)
+            return;
+        const previousCamera = this._camera;
+        const getDefaultWheelAction = (targetCamera) => isPerspectiveCamera(targetCamera) ? ACTION.DOLLY :
+            isOrthographicCamera(targetCamera) ? ACTION.ZOOM :
+                ACTION.NONE;
+        const getDefaultTwoTouchAction = (targetCamera) => isPerspectiveCamera(targetCamera) ? ACTION.TOUCH_DOLLY_TRUCK :
+            isOrthographicCamera(targetCamera) ? ACTION.TOUCH_ZOOM_TRUCK :
+                ACTION.NONE;
+        const previousWheelAction = this.mouseButtons?.wheel;
+        const previousTwoTouchAction = typeof (this.touches?.two) === "function" ? this.touches.two() : this.touches?.two;
+        // 只有当前仍沿用默认输入映射时，才按新相机类型刷新交互语义，避免覆盖业务层的自定义手势。
+        const shouldRefreshDefaultWheelAction = previousWheelAction === getDefaultWheelAction(previousCamera);
+        const shouldRefreshDefaultTwoTouchAction = previousTwoTouchAction === getDefaultTwoTouchAction(previousCamera);
         this._camera = camera;
+        this._zoom = camera.zoom;
+        this._zoomEnd = camera.zoom;
+        this._lastZoom = camera.zoom;
         this.updateCameraUp();
         this._camera.updateProjectionMatrix();
         this._updateNearPlaneCorners();
         this._needsUpdate = true;
+        if (shouldRefreshDefaultWheelAction && this.mouseButtons) {
+            this.mouseButtons.wheel = getDefaultWheelAction(camera);
+        }
+        if (shouldRefreshDefaultTwoTouchAction && this.touches) {
+            this.touches.two = () => getDefaultTwoTouchAction(camera);
+        }
+    }
+    // 兼容宿主层在透视/正交切换后直接替换当前 active camera。
+    setCamera(camera) {
+        this.camera = camera;
+        return this;
     }
     /**
      * Whether or not the controls are enabled.
@@ -2682,7 +2710,7 @@ class CameraControls extends EventDispatcher {
 
     setScene(scene) {
         this.scene = scene;
-        this._camera = scene.getActiveCamera();
+        return this.setCamera(scene.getActiveCamera());
     }
     _updateNearPlaneCorners() {
         if (isPerspectiveCamera(this._camera)) {

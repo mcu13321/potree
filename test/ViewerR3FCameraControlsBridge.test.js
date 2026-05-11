@@ -239,4 +239,25 @@ describe("Viewer R3F camera-controls 桥接", () => {
 		expect(legacySetScene).toHaveBeenCalledWith(scene);
 		expect(undeclaredSetScene).not.toHaveBeenCalled();
 	});
+
+	it("setCameraMode 切换投影后应立即同步当前 controls 与旧 cameraControls", () => {
+		const syncControlsContext = vi.fn();
+		const scene = {
+			pointclouds: [
+				{material: {}},
+				{material: {}},
+			],
+		};
+		const viewerLike = {
+			scene,
+			controls: {name: "active-controls"},
+			cameraControls: {name: "legacy-camera-controls"},
+			syncControlsContext,
+		};
+
+		Viewer.prototype.setCameraMode.call(viewerLike, 0);
+
+		expect(syncControlsContext).toHaveBeenNthCalledWith(1, viewerLike.controls, scene);
+		expect(syncControlsContext).toHaveBeenNthCalledWith(2, viewerLike.cameraControls, scene);
+	});
 });

@@ -20,6 +20,7 @@ import {MeasuringTool} from "../utils/MeasuringTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
 import {TreeTagTool} from "../utils/TreeTagTool.js";
+import {TrackPointTool} from "../utils/TrackPointTool.js";
 import {RectangleSVGTool} from "../utils/RectangleSVGTool.js";
 import {PolygonSVGTool} from "../utils/PolygonSVGTool.js";
 import {
@@ -367,6 +368,7 @@ export class Viewer extends EventDispatcher{
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);
 		this.treeTagTool = new TreeTagTool(this);
+		this.trackPointTool = new TrackPointTool(this);
 		this.rectangleSVGTool = new RectangleSVGTool(this);
 		this.polygonSVGTool = new PolygonSVGTool(this);
 		
@@ -788,6 +790,27 @@ export class Viewer extends EventDispatcher{
 
 	applyPointcloudEffectDefaults (pointcloud) {
 		return applyViewerEffectDefaults(this, pointcloud, this.isEDLSupported());
+	};
+
+	/**
+	 * 由宿主注入轨迹点纯数据，Potree 内部只负责渲染与交互。
+	 * @param {Array<Object>} points
+	 */
+	setTrackPointData (points) {
+		this.trackPointTool?.setData(points);
+	};
+
+	/**
+	 * 由宿主注入轨迹点展示状态，避免 Potree 直接依赖业务 store。
+	 * @param {Object} state
+	 */
+	setTrackPointState (state) {
+		this.trackPointTool?.setState(state);
+	};
+
+	/** 清空 Potree 内部维护的轨迹点渲染数据。 */
+	clearTrackPointData () {
+		this.trackPointTool?.clear();
 	};
 
 	hasVisibleEDLEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
@@ -1344,6 +1367,13 @@ export class Viewer extends EventDispatcher{
 		for(let pointcloud of this.scene.pointclouds) {
 			pointcloud.material.useOrthographicCamera = mode == CameraMode.ORTHOGRAPHIC;
 		}
+
+		// 投影模式切换后，立即把新的 active camera 下发给当前 controls，
+		// 同时同步旧 cameraControls，避免主场景正交模式仍绑定旧透视相机。
+		this.syncControlsContext(this.controls, this.scene);
+		if(this.cameraControls && this.cameraControls !== this.controls){
+			this.syncControlsContext(this.cameraControls, this.scene);
+		}
 	}
 
 	getProjection(){
@@ -1540,7 +1570,8 @@ export class Viewer extends EventDispatcher{
 			this.configureControlsCapabilities(this.cameraControls, {
 				isDomDrivenControls: true,
 				drivesCameraDirectly: true,
-				supportsSetCamera: false,
+				// 旧 cameraControls 也要接入统一 setCamera 协议，保证投影切换后能绑定新的 active camera。
+				supportsSetCamera: true,
 				supportsSetScene: false,
 				usesRigidTopViewFit: false,
 			});

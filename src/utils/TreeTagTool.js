@@ -411,9 +411,8 @@ export class TreeTagTool extends EventDispatcher {
 		const edlSupported = this._isEDLSupported();
 
 		if (!this._isGroupSource() || this.tags.size === 0) {
-			// 非多点云模式下不再维持 TreeTag 带来的批量效果状态。
 			for (const pc of this.viewer.scene.pointclouds) {
-				clearPointcloudEffects(pc);
+				this.viewer.applyPointcloudEffectDefaults(pc);
 			}
 		} else {
 			for (const [pointcloud, tag] of this.tags) {

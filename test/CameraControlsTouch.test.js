@@ -220,4 +220,34 @@ describe("CameraControls 触摸状态回收", () => {
 
 		controls.disconnect();
 	});
+
+	it("setCamera 切换到正交相机后应刷新默认滚轮和双指语义", () => {
+		const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+		const controls = new CameraControls(createMockScene(camera));
+		const nextCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+		nextCamera.zoom = 4;
+
+		expect(controls.mouseButtons.wheel).toBe(CameraControls.ACTION.DOLLY);
+		expect(controls.touches.two()).toBe(CameraControls.ACTION.TOUCH_DOLLY_TRUCK);
+
+		controls.setCamera(nextCamera);
+
+		expect(controls.camera).toBe(nextCamera);
+		expect(controls.mouseButtons.wheel).toBe(CameraControls.ACTION.ZOOM);
+		expect(controls.touches.two()).toBe(CameraControls.ACTION.TOUCH_ZOOM_TRUCK);
+	});
+
+	it("setCamera 不应覆盖业务层自定义的滚轮和双指语义", () => {
+		const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+		const controls = new CameraControls(createMockScene(camera));
+		const nextCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+
+		controls.mouseButtons.wheel = CameraControls.ACTION.NONE;
+		controls.touches.two = () => CameraControls.ACTION.TOUCH_ROTATE;
+
+		controls.setCamera(nextCamera);
+
+		expect(controls.mouseButtons.wheel).toBe(CameraControls.ACTION.NONE);
+		expect(controls.touches.two()).toBe(CameraControls.ACTION.TOUCH_ROTATE);
+	});
 });
