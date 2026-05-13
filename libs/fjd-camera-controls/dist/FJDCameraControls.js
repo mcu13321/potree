@@ -283,21 +283,45 @@ var FJDCameraControls = class extends EventDispatcher {
     this._zoomEnd = this._zoom;
     this._orbitPoint = options.orbitPoint?.clone?.() ?? this._camera.position.clone();
     this._orbitPointCurrent = this._orbitPoint.clone();
+    this._yawVelocity = 0;
+    this._pitchVelocity = 0;
+    this._panVelocity = new THREEProxy.Vector3();
+    this._forwardVelocity = 0;
+    this._zoomInertiaVelocity = 0;
+    this._isRotatingByUser = false;
+    this._isPanningByUser = false;
+    this._isDollyingByUser = false;
+    this._lastUpdateDelta = 1 / 60;
     this._worldUp = this._resolveWorldUp(options.worldUp, WORLD_UP);
     if (options.worldUp) {
       this._camera.up.copy(this._worldUp);
     }
     this._enabled = true;
     this.currentAction = ACTION.NONE;
-    this.azimuthRotateSpeed = options.azimuthRotateSpeed ?? 1;
-    this.polarRotateSpeed = options.polarRotateSpeed ?? 1;
+    this.azimuthRotateSpeed = options.azimuthRotateSpeed ?? 0.3;
+    this.polarRotateSpeed = options.polarRotateSpeed ?? 0.3;
     this.truckSpeed = options.truckSpeed ?? 1;
     this.dollySpeed = options.dollySpeed ?? 1;
+    this.rotateImmediateRatio = options.rotateImmediateRatio ?? 0.7;
+    this.rotateImpulseGain = options.rotateImpulseGain ?? 1;
+    this.rotateDamping = options.rotateDamping ?? 12;
+    this.rotateStopThreshold = options.rotateStopThreshold ?? 1e-3;
+    this.panImmediateRatio = options.panImmediateRatio ?? 0.65;
+    this.panImpulseGain = options.panImpulseGain ?? 1.1;
+    this.panDamping = options.panDamping ?? 10;
+    this.panStopThreshold = options.panStopThreshold ?? 1e-4;
+    this.wheelImpulseGain = options.wheelImpulseGain ?? 3.2;
+    this.wheelImmediateRatio = options.wheelImmediateRatio ?? 0.35;
+    this.wheelDamping = options.wheelDamping ?? 10;
+    this.wheelStopThreshold = options.wheelStopThreshold ?? 1e-3;
+    this.zoomImpulseGain = options.zoomImpulseGain ?? 2.4;
+    this.zoomDamping = options.zoomDamping ?? 11;
+    this.zoomStopThreshold = options.zoomStopThreshold ?? 1e-4;
     this.smoothTime = options.smoothTime ?? DEFAULT_SMOOTH_TIME;
     this.draggingSmoothTime = options.draggingSmoothTime ?? this.smoothTime;
     this.maxSpeed = options.maxSpeed ?? Infinity;
-    this.minPolarAngle = options.minPolarAngle ?? 0;
-    this.maxPolarAngle = options.maxPolarAngle ?? Math.PI;
+    this.minPolarAngle = options.minPolarAngle ?? 0.05;
+    this.maxPolarAngle = options.maxPolarAngle ?? Math.PI - 0.05;
     this.dragThreshold = options.dragThreshold ?? 3;
     this.touchTapThreshold = options.touchTapThreshold ?? 8;
     this.restThreshold = options.restThreshold ?? DEFAULT_REST_THRESHOLD;
@@ -568,8 +592,10 @@ var FJDCameraControls = class extends EventDispatcher {
   // 推进补间动画，并补发 wake / rest / sleep 等兼容事件。
   // 每帧由宿主调用，用于推进动画和派发事件。
   update(delta = 0) {
+    this._lastUpdateDelta = Math.max(Number(delta) || 0, 1 / 120);
+    this._updateUserInertia(this._lastUpdateDelta);
     if (this._isAnimating) {
-      this._updateTransition(delta);
+      this._updateTransition(this._lastUpdateDelta);
     }
     const changed = this._hasUpdated;
     if (changed) {
@@ -934,7 +960,6 @@ var FJDCameraControls = class extends EventDispatcher {
     );
     return this._setPose(this._tmpPosition, this._tmpQuaternion2, this._orbitPoint, true);
   }
-  // 历史兼容接口，最终会被后面的绝对旋转实现覆盖。
   // 按屏幕像素位移执行平移。
   truck(x, y, enableTransition = false) {
     this._cancelAnimationToCurrent();
@@ -1087,11 +1112,13 @@ var FJDCameraControls = class extends EventDispatcher {
       if (!this._hasPassedDragThreshold) {
         this._hasPassedDragThreshold = true;
         this.currentAction = ACTION.ROTATE;
+        this._isRotatingByUser = true;
         this._dispatchControlStart();
       }
       this._rotateByPointerDelta(deltaX, deltaY);
       this.dispatchEvent({ type: "control" });
     } else if (this._activeButton === 2) {
+      this._isPanningByUser = true;
       this._panByPixels(deltaX, deltaY);
       this.dispatchEvent({ type: "control" });
     }
@@ -1113,6 +1140,8 @@ var FJDCameraControls = class extends EventDispatcher {
     this._resetPointerInteraction();
     this._removeDocumentPointerListeners();
     if (hadControlAction) {
+      this._isRotatingByUser = false;
+      this._isPanningByUser = false;
       this.dispatchEvent({ type: "controlend" });
     }
   }
@@ -1132,6 +1161,8 @@ var FJDCameraControls = class extends EventDispatcher {
     this._resetPointerInteraction();
     this._removeDocumentPointerListeners();
     if (hadControlAction) {
+      this._isRotatingByUser = false;
+      this._isPanningByUser = false;
       this.dispatchEvent({ type: "controlend" });
     }
   }
@@ -1143,11 +1174,20 @@ var FJDCameraControls = class extends EventDispatcher {
     event.preventDefault();
     this._cancelAnimationToCurrent();
     const step = this._computeWheelStep(event);
+    const immediateStep = step * this.wheelImmediateRatio;
+    const residualStep = step - immediateStep;
     this.currentAction = ACTION.DOLLY;
+    this._isDollyingByUser = true;
     this._dispatchControlStart();
-    this._moveForward(step);
+    this._moveForward(immediateStep);
+    if (this._camera.isOrthographicCamera) {
+      this._zoomInertiaVelocity += residualStep * this.zoomImpulseGain;
+    } else {
+      this._forwardVelocity += residualStep * this.wheelImpulseGain;
+    }
     this.dispatchEvent({ type: "control" });
     this.currentAction = ACTION.NONE;
+    this._isDollyingByUser = false;
     this.dispatchEvent({ type: "controlend" });
   }
   // 阻止右键弹出浏览器默认菜单。
@@ -1200,6 +1240,79 @@ var FJDCameraControls = class extends EventDispatcher {
   _dispatchControlStart() {
     this.dispatchEvent({ type: "transitionstart" });
     this.dispatchEvent({ type: "controlstart" });
+  }
+  // 清空交互惯性层中的剩余速度，避免程序动画继承上一段手势的运动趋势。
+  _clearUserInertia() {
+    this._yawVelocity = 0;
+    this._pitchVelocity = 0;
+    this._panVelocity.set(0, 0, 0);
+    this._forwardVelocity = 0;
+    this._zoomInertiaVelocity = 0;
+    this._isRotatingByUser = false;
+    this._isPanningByUser = false;
+    this._isDollyingByUser = false;
+  }
+  // 将一段旋转输入拆成“立即响应 + 惯性脉冲”，兼顾跟手性与松手后的拖尾。
+  _applyRotateInput(yaw, pitch, deltaTime = this._lastUpdateDelta) {
+    const immediateYaw = yaw * this.rotateImmediateRatio;
+    const immediatePitch = pitch * this.rotateImmediateRatio;
+    const residualYaw = yaw - immediateYaw;
+    const residualPitch = pitch - immediatePitch;
+    const safeDelta = Math.max(Number(deltaTime) || 0, 1 / 120);
+    this._rotateByAngles(immediateYaw, immediatePitch);
+    this._yawVelocity += residualYaw / safeDelta * this.rotateImpulseGain;
+    this._pitchVelocity += residualPitch / safeDelta * this.rotateImpulseGain;
+  }
+  // 把世界空间中的平移位移作用到相机位姿本身，保持 FJD 现有“平移不改变旋转中心”的语义。
+  _applyPanOffset(offset) {
+    this._positionEnd.add(offset);
+    this._position.add(offset);
+    this._quaternion.copy(this._quaternionEnd);
+    this._orbitPointCurrent.copy(this._orbitPoint);
+    this._applyPoseToCamera(this._position, this._quaternion, this._zoom);
+  }
+  // 每帧推进交互惯性。这里不改变 FJD 的空间模型，只复用既有位姿更新语义。
+  _updateUserInertia(delta) {
+    const safeDelta = Math.max(Number(delta) || 0, 1 / 120);
+    const panStopThresholdSq = this.panStopThreshold * this.panStopThreshold;
+    if (Math.abs(this._yawVelocity) > this.rotateStopThreshold || Math.abs(this._pitchVelocity) > this.rotateStopThreshold) {
+      this._rotateByAngles(this._yawVelocity * safeDelta, this._pitchVelocity * safeDelta);
+      const rotateDecay = Math.exp(-this.rotateDamping * safeDelta);
+      this._yawVelocity *= rotateDecay;
+      this._pitchVelocity *= rotateDecay;
+      if (Math.abs(this._yawVelocity) <= this.rotateStopThreshold) {
+        this._yawVelocity = 0;
+      }
+      if (Math.abs(this._pitchVelocity) <= this.rotateStopThreshold) {
+        this._pitchVelocity = 0;
+      }
+    }
+    if (this._panVelocity.lengthSq() > panStopThresholdSq) {
+      this._applyPanOffset(this._tmpOffset.copy(this._panVelocity).multiplyScalar(safeDelta));
+      this._panVelocity.multiplyScalar(Math.exp(-this.panDamping * safeDelta));
+      if (this._panVelocity.lengthSq() <= panStopThresholdSq) {
+        this._panVelocity.set(0, 0, 0);
+      }
+    }
+    if (this._camera.isOrthographicCamera) {
+      if (Math.abs(this._zoomInertiaVelocity) > this.zoomStopThreshold) {
+        this._moveForward(this._zoomInertiaVelocity * safeDelta);
+        const zoomDecay = Math.exp(-this.zoomDamping * safeDelta);
+        this._zoomInertiaVelocity *= zoomDecay;
+        if (Math.abs(this._zoomInertiaVelocity) <= this.zoomStopThreshold) {
+          this._zoomInertiaVelocity = 0;
+        }
+      }
+      return;
+    }
+    if (Math.abs(this._forwardVelocity) > this.wheelStopThreshold) {
+      this._moveForward(this._forwardVelocity * safeDelta);
+      const wheelDecay = Math.exp(-this.wheelDamping * safeDelta);
+      this._forwardVelocity *= wheelDecay;
+      if (Math.abs(this._forwardVelocity) <= this.wheelStopThreshold) {
+        this._forwardVelocity = 0;
+      }
+    }
   }
   // 统一解析 fit 目标，并在退化目标时回退到宿主提供的参考包围盒。
   // 输入既可以是 Box3，也可以是 Sphere、Object3D 或点测量对象。
@@ -1328,6 +1441,7 @@ var FJDCameraControls = class extends EventDispatcher {
       if (!this._hasPassedDragThreshold) {
         this._hasPassedDragThreshold = true;
         this.currentAction = ACTION.ROTATE;
+        this._isRotatingByUser = true;
         this._dispatchControlStart();
       }
       this._rotateByPointerDelta(deltaX, deltaY);
@@ -1340,6 +1454,8 @@ var FJDCameraControls = class extends EventDispatcher {
       const deltaCenterX = center.x - this._touchLastCenter.x;
       const deltaCenterY = center.y - this._touchLastCenter.y;
       const deltaDistance = distance - this._touchLastDistance;
+      this._isPanningByUser = true;
+      this._isDollyingByUser = true;
       this._panByPixels(deltaCenterX, deltaCenterY);
       this._moveForward(this._computePinchForwardDistance(deltaDistance));
       this.dispatchEvent({ type: "control" });
@@ -1360,6 +1476,9 @@ var FJDCameraControls = class extends EventDispatcher {
       this._restoreOrbitPointAfterClickIfNeeded();
     }
     if (hadControlAction) {
+      this._isRotatingByUser = false;
+      this._isPanningByUser = false;
+      this._isDollyingByUser = false;
       this.dispatchEvent({ type: "controlend" });
     }
     if (this._activeTouchPointers.size === 0) {
@@ -1383,6 +1502,7 @@ var FJDCameraControls = class extends EventDispatcher {
     const { center, distance } = this._computeTwoTouchGestureState();
     this._touchMode = "two";
     this.currentAction = ACTION.TRUCK;
+    this._isPanningByUser = true;
     this._touchLastCenter.copy(center);
     this._touchLastDistance = distance;
     this._dispatchControlStart();
@@ -1456,13 +1576,20 @@ var FJDCameraControls = class extends EventDispatcher {
       this.minPolarAngle,
       this.maxPolarAngle
     );
-    this._rotateByAngles(yaw, clampedPitch);
+    this._applyRotateInput(yaw, clampedPitch, this._lastUpdateDelta);
   }
   // 按给定偏航角与俯仰角直接旋转相机位姿。
   _rotateByAngles(yaw, pitch) {
+    const clampedPitch = clampPitchAngleDelta(
+      pitch,
+      this._quaternionEnd,
+      this._worldUp,
+      this.minPolarAngle,
+      this.maxPolarAngle
+    );
     const deltaQuaternion = composeOrbitDeltaQuaternion(
       yaw,
-      pitch,
+      clampedPitch,
       this._quaternionEnd,
       this._worldUp,
       this._tmpQuaternion
@@ -1496,11 +1623,11 @@ var FJDCameraControls = class extends EventDispatcher {
       this._quaternionEnd,
       this._tmpOffset
     );
-    this._positionEnd.add(offset);
-    this._position.copy(this._positionEnd);
-    this._quaternion.copy(this._quaternionEnd);
-    this._orbitPointCurrent.copy(this._orbitPoint);
-    this._applyPoseToCamera(this._position, this._quaternion, this._zoom);
+    const safeDelta = Math.max(this._lastUpdateDelta, 1 / 120);
+    const immediateOffset = this._tmpDirection.copy(offset).multiplyScalar(this.panImmediateRatio);
+    const residualOffset = this._tmpDirection2.copy(offset).sub(immediateOffset);
+    this._applyPanOffset(immediateOffset);
+    this._panVelocity.addScaledVector(residualOffset, this.panImpulseGain / safeDelta);
   }
   // 执行前进或后退；正交相机下会退化为 zoom 调整。
   _moveForward(distance) {
@@ -1543,6 +1670,7 @@ var FJDCameraControls = class extends EventDispatcher {
   }
   // 设置新的目标位姿，并按需选择立即生效或补间生效。
   _setPose(position, quaternion, orbitPoint, enableTransition, zoom = this._zoomEnd) {
+    this._clearUserInertia();
     this._positionEnd.copy(position);
     this._quaternionEnd.copy(quaternion);
     this._orbitPoint.copy(orbitPoint);
