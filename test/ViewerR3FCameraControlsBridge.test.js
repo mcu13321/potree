@@ -12,6 +12,17 @@ function createBridgeCapableControls() {
 	};
 }
 
+function createRigidBridgeCapableControls() {
+	return {
+		setRigidPose: vi.fn(),
+		setLookAt: vi.fn(),
+		zoomTo: vi.fn(),
+		camera: {
+			isOrthographicCamera: false,
+		},
+	};
+}
+
 function createExternalCameraControlsState() {
 	return {
 		// 模拟 R3F 侧 controls 实例，按统一 pose 桥接语义提供 position + target。
@@ -20,6 +31,26 @@ function createExternalCameraControlsState() {
 		},
 		getTarget() {
 			return {x: 1, y: 2, z: 3};
+		},
+		camera: {
+			isOrthographicCamera: false,
+		},
+	};
+}
+
+function createExternalRigidControlsState() {
+	return {
+		// 模拟 FJD controls，桥接时应优先读取刚体位姿而不是旧 target。
+		getPosition() {
+			return {x: 10, y: 20, z: 30};
+		},
+		getRigidPose() {
+			return {
+				position: [10, 20, 30],
+				quaternion: [0.1, 0.2, 0.3, 0.9],
+				orbitPoint: [1, 2, 3],
+				zoom: 2,
+			};
 		},
 		camera: {
 			isOrthographicCamera: false,
@@ -70,6 +101,44 @@ describe("Viewer R3F camera-controls 桥接", () => {
 		);
 		expect(activeControls.zoomTo).not.toHaveBeenCalled();
 		expect(fallbackControls.setLookAt).not.toHaveBeenCalled();
+	});
+
+	it("FJD controls 桥接应优先按刚体位姿同步", () => {
+		const activeControls = createRigidBridgeCapableControls();
+		const viewerLike = {
+			controls: activeControls,
+			cameraControls: null,
+			cloneExternalPoseVector:
+				Viewer.prototype.cloneExternalPoseVector,
+			cloneExternalPoseQuaternion:
+				Viewer.prototype.cloneExternalPoseQuaternion,
+			canReadExternalControlsPose:
+				Viewer.prototype.canReadExternalControlsPose,
+			readExternalControlsPose:
+				Viewer.prototype.readExternalControlsPose,
+			canApplyExternalControlsPose:
+				Viewer.prototype.canApplyExternalControlsPose,
+			applyExternalControlsPose:
+				Viewer.prototype.applyExternalControlsPose,
+			resolveExternalCameraControlsBridgeTarget:
+				Viewer.prototype.resolveExternalCameraControlsBridgeTarget,
+		};
+
+		const result = Viewer.prototype.setFromR3fCameraControls.call(
+			viewerLike,
+			createExternalRigidControlsState(),
+			false,
+		);
+
+		expect(result).toBe(true);
+		expect(activeControls.setRigidPose).toHaveBeenCalledWith(
+			expect.objectContaining({
+				mode: "rigid",
+				zoom: 2,
+			}),
+			false,
+		);
+		expect(activeControls.setLookAt).not.toHaveBeenCalled();
 	});
 
 	it("当前 controls 不兼容时应回退到旧 cameraControls", () => {

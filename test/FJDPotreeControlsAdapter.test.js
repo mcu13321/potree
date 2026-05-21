@@ -267,6 +267,22 @@ describe("FJDPotreeControlsAdapter", () => {
 		expect(adapter.helperCompositeGroup.visible).toBe(false);
 	});
 
+	it("关闭 helper 时应同步关闭旋转中心拾取 resolver", () => {
+		const {viewer} = createViewer();
+		const adapter = new FJDPotreeControlsAdapter(viewer);
+		const setResolverSpy = vi.spyOn(adapter.controls, "setOrbitPointResolver");
+
+		adapter.setHelperEnabled(false);
+
+		expect(setResolverSpy).toHaveBeenLastCalledWith(null);
+		expect(adapter.helperGroup.visible).toBe(false);
+		expect(adapter.helperCompositeGroup.visible).toBe(false);
+
+		adapter.setHelperEnabled(true);
+
+		expect(setResolverSpy).toHaveBeenLastCalledWith(adapter._resolveOrbitPointForControls);
+	});
+
 	it("helper 的球半径与三轴长度应跟随场景包围盒大小缩放", () => {
 		const {viewer} = createViewer();
 		const adapter = new FJDPotreeControlsAdapter(viewer);

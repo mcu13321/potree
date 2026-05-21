@@ -218,7 +218,7 @@ function computeLookAtQuaternion(position, target, worldUp = WORLD_UP, out = new
 }
 
 // src/FJDCameraControls.js
-var ACTION = Object.freeze({
+var BASE_ACTION = {
   NONE: 0,
   ROTATE: 1,
   TRUCK: 2,
@@ -226,6 +226,14 @@ var ACTION = Object.freeze({
   OFFSET: 8,
   DOLLY: 16,
   ZOOM: 32
+};
+var ACTION = Object.freeze({
+  ...BASE_ACTION,
+  TOUCH_ROTATE: BASE_ACTION.ROTATE,
+  TOUCH_TRUCK: BASE_ACTION.TRUCK,
+  TOUCH_DOLLY: BASE_ACTION.DOLLY,
+  TOUCH_ZOOM: BASE_ACTION.ZOOM,
+  TOUCH_DOLLY_TRUCK: BASE_ACTION.DOLLY | BASE_ACTION.TRUCK
 });
 var MOUSE_BUTTON_TO_NAME = {
   0: "left",
@@ -233,8 +241,10 @@ var MOUSE_BUTTON_TO_NAME = {
   2: "right"
 };
 var WHEEL_STEP_RATIO = 1 / 5;
+var WHEEL_ZOOM_STEP_RATIO = 0.18;
 var MIN_WHEEL_STEP = 0.2;
 var TOUCH_PINCH_FORWARD_RATIO = 4;
+var TOUCH_PINCH_ZOOM_RATIO = 2.5;
 var TOP_VIEW_PADDING_FACTOR = 1.05;
 var DEFAULT_SMOOTH_TIME = 0.25;
 var DEFAULT_REST_THRESHOLD = 1e-4;
@@ -288,6 +298,7 @@ var FJDCameraControls = class extends EventDispatcher {
     this._panVelocity = new THREEProxy.Vector3();
     this._forwardVelocity = 0;
     this._zoomInertiaVelocity = 0;
+    this._zoomWheelVelocity = 0;
     this._isRotatingByUser = false;
     this._isPanningByUser = false;
     this._isDollyingByUser = false;
@@ -510,6 +521,17 @@ var FJDCameraControls = class extends EventDispatcher {
     this._fitReferenceBoundsResolver = typeof resolver === "function" ? resolver : null;
     return this;
   }
+  // 兼容 camera-controls 的动作配置写法，支持直接常量或返回常量的函数。
+  _resolveInputAction(action) {
+    return typeof action === "function" ? action() : action;
+  }
+  // 判断复合触摸动作是否包含指定语义，兼容 TOUCH_DOLLY_TRUCK 这类组合常量。
+  _includesInputAction(action, expectedAction) {
+    if (expectedAction === ACTION.NONE) {
+      return action === ACTION.NONE;
+    }
+    return action === expectedAction || (Number(action) & Number(expectedAction)) === expectedAction;
+  }
   // 终止当前动画和交互状态，并在必要时补发 controlend。
   cancel() {
     const hadControlAction = this.currentAction !== ACTION.NONE;
@@ -623,6 +645,82 @@ var FJDCameraControls = class extends EventDispatcher {
   // 读取当前相机位置。
   getPosition(out = new THREEProxy.Vector3(), receiveEndValue = true) {
     return out.copy(receiveEndValue ? this._positionEnd : this._position);
+  }
+  // 读取当前刚体相机朝向，供宿主在跨场景同步时避开旧球坐标语义。
+  getQuaternion(out = new THREEProxy.Quaternion(), receiveEndValue = true) {
+    return out.copy(receiveEndValue ? this._quaternionEnd : this._quaternion);
+  }
+  // 将数组、Vector3 或普通对象统一读取为 Vector3。
+  _readVectorLike(value, out = new THREEProxy.Vector3()) {
+    if (Array.isArray(value)) {
+      return out.set(
+        Number(value[0]) || 0,
+        Number(value[1]) || 0,
+        Number(value[2]) || 0
+      );
+    }
+    if (value?.isVector3 === true || typeof value?.toArray === "function") {
+      return out.copy(value);
+    }
+    return out.set(
+      Number(value?.x) || 0,
+      Number(value?.y) || 0,
+      Number(value?.z) || 0
+    );
+  }
+  // 将数组、Quaternion 或普通对象统一读取为单位四元数。
+  _readQuaternionLike(value, out = new THREEProxy.Quaternion()) {
+    if (Array.isArray(value)) {
+      return out.set(
+        Number(value[0]) || 0,
+        Number(value[1]) || 0,
+        Number(value[2]) || 0,
+        Number.isFinite(Number(value[3])) ? Number(value[3]) : 1
+      ).normalize();
+    }
+    if (value?.isQuaternion === true || typeof value?.toArray === "function") {
+      return out.copy(value).normalize();
+    }
+    return out.set(
+      Number(value?.x) || 0,
+      Number(value?.y) || 0,
+      Number(value?.z) || 0,
+      Number.isFinite(Number(value?.w)) ? Number(value.w) : 1
+    ).normalize();
+  }
+  // 导出刚体位姿；同步链路应优先使用 position + quaternion，而不是 target + spherical。
+  getRigidPose(receiveEndValue = true) {
+    const position = receiveEndValue ? this._positionEnd : this._position;
+    const quaternion = receiveEndValue ? this._quaternionEnd : this._quaternion;
+    const orbitPoint = receiveEndValue ? this._orbitPoint : this._orbitPointCurrent;
+    return {
+      position: position.toArray(),
+      quaternion: quaternion.toArray(),
+      orbitPoint: orbitPoint.toArray(),
+      zoom: receiveEndValue ? this._zoomEnd : this._zoom
+    };
+  }
+  // 按刚体位姿恢复相机；未传 orbitPoint 时按当前位置差值平移旧旋转中心。
+  setRigidPose(pose, enableTransition = false) {
+    if (!pose || typeof pose !== "object") {
+      return Promise.resolve();
+    }
+    this._cancelAnimationToCurrent();
+    const nextPosition = pose.position ? this._readVectorLike(pose.position, this._tmpPosition) : this._tmpPosition.copy(this._positionEnd);
+    const nextQuaternion = pose.quaternion ? this._readQuaternionLike(pose.quaternion, this._tmpQuaternion) : this._tmpQuaternion.copy(this._quaternionEnd);
+    const nextOrbitPoint = this._tmpOffset;
+    if (pose.orbitPoint || pose.target) {
+      this._readVectorLike(pose.orbitPoint ?? pose.target, nextOrbitPoint);
+    } else {
+      const orbitOffset = this._tmpPosition2.copy(this._orbitPoint).sub(this._positionEnd);
+      nextOrbitPoint.copy(nextPosition).add(orbitOffset);
+    }
+    const nextZoom = Number.isFinite(pose.zoom) ? pose.zoom : this._zoomEnd;
+    const preserveRotationInertia = pose.preserveRotationInertia === true && !pose.quaternion;
+    return this._setPose(nextPosition, nextQuaternion, nextOrbitPoint, enableTransition, nextZoom, {
+      // 内部漫游只平移相机位置时，需要保留用户刚刚拖拽产生的旋转残量。
+      preserveRotationInertia
+    });
   }
   // 根据当前位置与目标点反算球坐标。
   getSpherical(out = new THREEProxy.Spherical(), receiveEndValue = true) {
@@ -1067,7 +1165,9 @@ var FJDCameraControls = class extends EventDispatcher {
     }
     this._cancelAnimationToCurrent();
     const buttonName = MOUSE_BUTTON_TO_NAME[event.button];
-    const mappedAction = buttonName ? this.mouseButtons[buttonName] : ACTION.NONE;
+    const mappedAction = this._resolveInputAction(
+      buttonName ? this.mouseButtons[buttonName] : ACTION.NONE
+    );
     if (mappedAction !== ACTION.ROTATE && mappedAction !== ACTION.TRUCK) {
       return;
     }
@@ -1168,22 +1268,31 @@ var FJDCameraControls = class extends EventDispatcher {
   }
   // 处理桌面端滚轮缩放。
   _handleWheel(event) {
-    if (!this._enabled || !this._domElement || this.mouseButtons.wheel !== ACTION.DOLLY) {
+    const wheelAction = this._resolveInputAction(this.mouseButtons.wheel);
+    if (!this._enabled || !this._domElement || wheelAction !== ACTION.DOLLY && wheelAction !== ACTION.ZOOM) {
       return;
     }
     event.preventDefault();
     this._cancelAnimationToCurrent();
     const step = this._computeWheelStep(event);
-    const immediateStep = step * this.wheelImmediateRatio;
-    const residualStep = step - immediateStep;
-    this.currentAction = ACTION.DOLLY;
+    this.currentAction = wheelAction;
     this._isDollyingByUser = true;
     this._dispatchControlStart();
-    this._moveForward(immediateStep);
-    if (this._camera.isOrthographicCamera) {
-      this._zoomInertiaVelocity += residualStep * this.zoomImpulseGain;
+    if (wheelAction === ACTION.ZOOM) {
+      const zoomStep = this._computeWheelZoomStep(event);
+      const immediateZoomStep = zoomStep * this.wheelImmediateRatio;
+      const residualZoomStep = zoomStep - immediateZoomStep;
+      this._zoomByWheelStep(immediateZoomStep);
+      this._zoomWheelVelocity += residualZoomStep * this.zoomImpulseGain;
     } else {
-      this._forwardVelocity += residualStep * this.wheelImpulseGain;
+      const immediateStep = step * this.wheelImmediateRatio;
+      const residualStep = step - immediateStep;
+      this._moveForward(immediateStep);
+      if (this._camera.isOrthographicCamera) {
+        this._zoomInertiaVelocity += residualStep * this.zoomImpulseGain;
+      } else {
+        this._forwardVelocity += residualStep * this.wheelImpulseGain;
+      }
     }
     this.dispatchEvent({ type: "control" });
     this.currentAction = ACTION.NONE;
@@ -1242,12 +1351,15 @@ var FJDCameraControls = class extends EventDispatcher {
     this.dispatchEvent({ type: "controlstart" });
   }
   // 清空交互惯性层中的剩余速度，避免程序动画继承上一段手势的运动趋势。
-  _clearUserInertia() {
-    this._yawVelocity = 0;
-    this._pitchVelocity = 0;
+  _clearUserInertia({ preserveRotation = false } = {}) {
+    if (!preserveRotation) {
+      this._yawVelocity = 0;
+      this._pitchVelocity = 0;
+    }
     this._panVelocity.set(0, 0, 0);
     this._forwardVelocity = 0;
     this._zoomInertiaVelocity = 0;
+    this._zoomWheelVelocity = 0;
     this._isRotatingByUser = false;
     this._isPanningByUser = false;
     this._isDollyingByUser = false;
@@ -1304,6 +1416,14 @@ var FJDCameraControls = class extends EventDispatcher {
         }
       }
       return;
+    }
+    if (Math.abs(this._zoomWheelVelocity) > this.zoomStopThreshold) {
+      this._zoomByWheelStep(this._zoomWheelVelocity * safeDelta);
+      const zoomDecay = Math.exp(-this.zoomDamping * safeDelta);
+      this._zoomWheelVelocity *= zoomDecay;
+      if (Math.abs(this._zoomWheelVelocity) <= this.zoomStopThreshold) {
+        this._zoomWheelVelocity = 0;
+      }
     }
     if (Math.abs(this._forwardVelocity) > this.wheelStopThreshold) {
       this._moveForward(this._forwardVelocity * safeDelta);
@@ -1379,6 +1499,10 @@ var FJDCameraControls = class extends EventDispatcher {
       new THREEProxy.Vector2(event.clientX, event.clientY)
     );
     if (this._activeTouchPointers.size === 1) {
+      const oneTouchAction = this._resolveInputAction(this.touches.one);
+      if (oneTouchAction === ACTION.NONE) {
+        return;
+      }
       const point = this._getPrimaryTouchPoint();
       this._touchMode = "one";
       this._dragStartClient.copy(point);
@@ -1393,6 +1517,10 @@ var FJDCameraControls = class extends EventDispatcher {
       return;
     }
     if (this._activeTouchPointers.size === 2) {
+      const twoTouchAction = this._resolveInputAction(this.touches.two);
+      if (twoTouchAction === ACTION.NONE) {
+        return;
+      }
       this._pendingSingleTouchCapture = false;
       if (this.currentAction !== ACTION.NONE) {
         this.dispatchEvent({ type: "controlend" });
@@ -1401,7 +1529,7 @@ var FJDCameraControls = class extends EventDispatcher {
       this._touchMode = "two";
       this._touchLastCenter.copy(center);
       this._touchLastDistance = distance;
-      this.currentAction = ACTION.TRUCK;
+      this.currentAction = twoTouchAction;
       this._dispatchControlStart();
     }
   }
@@ -1450,14 +1578,28 @@ var FJDCameraControls = class extends EventDispatcher {
       return;
     }
     if (this._touchMode === "two" && this._activeTouchPointers.size >= 2) {
+      const twoTouchAction = this._resolveInputAction(this.touches.two);
+      if (twoTouchAction === ACTION.NONE) {
+        return;
+      }
       const { center, distance } = this._computeTwoTouchGestureState();
       const deltaCenterX = center.x - this._touchLastCenter.x;
       const deltaCenterY = center.y - this._touchLastCenter.y;
       const deltaDistance = distance - this._touchLastDistance;
-      this._isPanningByUser = true;
-      this._isDollyingByUser = true;
-      this._panByPixels(deltaCenterX, deltaCenterY);
-      this._moveForward(this._computePinchForwardDistance(deltaDistance));
+      const shouldTruck = twoTouchAction === ACTION.TRUCK || this._includesInputAction(twoTouchAction, ACTION.TRUCK);
+      const shouldDolly = twoTouchAction === ACTION.DOLLY || this._includesInputAction(twoTouchAction, ACTION.DOLLY);
+      const shouldZoom = twoTouchAction === ACTION.ZOOM;
+      this._isPanningByUser = shouldTruck;
+      this._isDollyingByUser = shouldDolly || shouldZoom;
+      if (shouldTruck) {
+        this._panByPixels(deltaCenterX, deltaCenterY);
+      }
+      if (shouldDolly) {
+        this._moveForward(this._computePinchForwardDistance(deltaDistance));
+      }
+      if (shouldZoom) {
+        this._zoomByWheelStep(this._computePinchZoomStep(deltaDistance));
+      }
       this.dispatchEvent({ type: "control" });
       this._touchLastCenter.copy(center);
       this._touchLastDistance = distance;
@@ -1500,9 +1642,10 @@ var FJDCameraControls = class extends EventDispatcher {
       return;
     }
     const { center, distance } = this._computeTwoTouchGestureState();
+    const twoTouchAction = this._resolveInputAction(this.touches.two);
     this._touchMode = "two";
-    this.currentAction = ACTION.TRUCK;
-    this._isPanningByUser = true;
+    this.currentAction = twoTouchAction;
+    this._isPanningByUser = twoTouchAction === ACTION.TRUCK || this._includesInputAction(twoTouchAction, ACTION.TRUCK);
     this._touchLastCenter.copy(center);
     this._touchLastDistance = distance;
     this._dispatchControlStart();
@@ -1647,6 +1790,26 @@ var FJDCameraControls = class extends EventDispatcher {
     this._orbitPointCurrent.copy(this._orbitPoint);
     this._applyPoseToCamera(this._position, this._quaternion, this._zoom);
   }
+  // 按无量纲缩放步长调整 camera.zoom，不改变相机刚体位置。
+  _zoomByWheelStep(step) {
+    const zoomScale = Math.exp((Number(step) || 0) * this.dollySpeed);
+    this._zoomEnd = this._sanitizeZoom(this._zoomEnd * zoomScale);
+    this._zoom = this._zoomEnd;
+    this._position.copy(this._positionEnd);
+    this._quaternion.copy(this._quaternionEnd);
+    this._orbitPointCurrent.copy(this._orbitPoint);
+    this._applyPoseToCamera(this._position, this._quaternion, this._zoom);
+  }
+  // 根据滚轮事件计算纯 zoom 语义的投影倍率步长。
+  _computeWheelZoomStep(event) {
+    const wheelMagnitude = Math.min(Math.max(Math.abs(event.deltaY), 1), 120) / 120;
+    return event.deltaY < 0 ? WHEEL_ZOOM_STEP_RATIO * wheelMagnitude : -WHEEL_ZOOM_STEP_RATIO * wheelMagnitude;
+  }
+  // 根据双指捏合像素变化计算纯 zoom 语义的投影倍率步长。
+  _computePinchZoomStep(deltaDistance) {
+    const viewportHeight = Math.max(this._elementRect.height, 1);
+    return (Number(deltaDistance) || 0) / viewportHeight * TOUCH_PINCH_ZOOM_RATIO;
+  }
   // 根据滚轮事件计算本次缩放步长。
   _computeWheelStep(event) {
     const orbitDistance = computeOrbitDistance(this._positionEnd, this._orbitPoint);
@@ -1669,8 +1832,8 @@ var FJDCameraControls = class extends EventDispatcher {
     this._hasUpdated = true;
   }
   // 设置新的目标位姿，并按需选择立即生效或补间生效。
-  _setPose(position, quaternion, orbitPoint, enableTransition, zoom = this._zoomEnd) {
-    this._clearUserInertia();
+  _setPose(position, quaternion, orbitPoint, enableTransition, zoom = this._zoomEnd, options = {}) {
+    this._clearUserInertia({ preserveRotation: options.preserveRotationInertia === true });
     this._positionEnd.copy(position);
     this._quaternionEnd.copy(quaternion);
     this._orbitPoint.copy(orbitPoint);

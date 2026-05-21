@@ -61,7 +61,8 @@ export class FJDPotreeControlsAdapter {
 			this.controls.enabled = false;
 		}
 		this.syncControlsCameraContext();
-		this.controls.setOrbitPointResolver(this.resolveOrbitPoint.bind(this));
+		this._resolveOrbitPointForControls = this.resolveOrbitPoint.bind(this);
+		this.controls.setOrbitPointResolver(this._resolveOrbitPointForControls);
 		this.controls.setFitReferenceBoundsResolver(this.resolveFitReferenceBounds.bind(this));
 		this.helperGroup = this.createHelperGroup("fjd-camera-controls-orbit-center-helper");
 		this.helperCompositeGroup = this.createHelperGroup(
@@ -70,6 +71,7 @@ export class FJDPotreeControlsAdapter {
 		this.helperScene = new THREE.Scene();
 		this.helperScene.name = "scene_fjd_orbit_center_helper";
 		this.helperScene.add(this.helperCompositeGroup);
+		this.helperEnabled = true;
 		this.helperVisible = false;
 		this.helperRenderTarget = null;
 		this.occlusionRenderTarget = null;
@@ -306,13 +308,25 @@ export class FJDPotreeControlsAdapter {
 	// 根据当前渲染路径同步 helper 可见性。
 	syncHelperVisibility() {
 		const shouldUseEDLComposite = this.helperVisible && this.isEDLActive();
-		this.helperGroup.visible = this.helperVisible && !shouldUseEDLComposite;
-		this.helperCompositeGroup.visible = shouldUseEDLComposite;
+		this.helperGroup.visible = this.helperEnabled && this.helperVisible && !shouldUseEDLComposite;
+		this.helperCompositeGroup.visible = this.helperEnabled && shouldUseEDLComposite;
+	}
+
+	// 宿主可按业务场景关闭旋转中心辅助能力；内部漫游场景会关闭 helper 和点云拾取。
+	setHelperEnabled(enabled) {
+		this.helperEnabled = Boolean(enabled);
+		if (!this.helperEnabled) {
+			this.controls.setOrbitPointResolver?.(null);
+			this.hideHelper();
+			return;
+		}
+		this.controls.setOrbitPointResolver?.(this._resolveOrbitPointForControls);
+		this.syncHelperVisibility();
 	}
 
 	// 仅在旋转交互时显示 helper。
 	showHelperForRotate() {
-		if (!this.enabled || this.viewer.controls !== this.controls) {
+		if (!this.helperEnabled || !this.enabled || this.viewer.controls !== this.controls) {
 			return;
 		}
 		this.helperVisible = this.controls.currentAction === FJDCameraControls.ACTION.ROTATE;

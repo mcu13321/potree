@@ -1225,11 +1225,16 @@ export class Viewer extends EventDispatcher{
 	};
 
 	// 判断某个 controls 是否可以读取当前位姿。
-	// R3F -> Potree 桥接统一按 position + target 读取，不再依赖 spherical 语义。
+	// R3F -> Potree 桥接统一按 position + quaternion 读取，不再依赖 spherical 语义。
 	canReadExternalControlsPose(controls){
 		return !!controls &&
-			typeof controls.getTarget === "function" &&
-			typeof controls.getPosition === "function";
+			typeof controls.getPosition === "function" &&
+			(
+				typeof controls.getRigidPose === "function" ||
+				typeof controls.getQuaternion === "function" ||
+				!!controls.camera?.quaternion ||
+				typeof controls.getTarget === "function"
+			);
 	}
 
 	// 统一克隆桥接用的三维向量。
@@ -1246,6 +1251,29 @@ export class Viewer extends EventDispatcher{
 		);
 	}
 
+	// 统一克隆外部四元数，供 FJD 刚体相机同步使用。
+	cloneExternalPoseQuaternion(value){
+		if(value?.isQuaternion === true || typeof value?.clone === "function"){
+			return value.clone().normalize();
+		}
+
+		if(Array.isArray(value)){
+			return new THREE.Quaternion(
+				Number(value[0]) || 0,
+				Number(value[1]) || 0,
+				Number(value[2]) || 0,
+				Number.isFinite(Number(value[3])) ? Number(value[3]) : 1,
+			).normalize();
+		}
+
+		return new THREE.Quaternion(
+			Number(value?.x) || 0,
+			Number(value?.y) || 0,
+			Number(value?.z) || 0,
+			Number.isFinite(Number(value?.w)) ? Number(value.w) : 1,
+		).normalize();
+	}
+
 	// 从外部 controls 读取统一位姿。
 	// 正交相机额外携带 zoom，透视相机下 zoom 统一记为 null。
 	readExternalControlsPose(controls){
@@ -1253,19 +1281,60 @@ export class Viewer extends EventDispatcher{
 			return null;
 		}
 
+		if(typeof controls.getRigidPose === "function"){
+			const rigidPose = controls.getRigidPose(true);
+			if(!rigidPose?.position || !rigidPose?.quaternion){
+				return null;
+			}
+
+			return {
+				mode: "rigid",
+				position: this.cloneExternalPoseVector(rigidPose.position),
+				quaternion: this.cloneExternalPoseQuaternion(rigidPose.quaternion),
+				orbitPoint: rigidPose.orbitPoint ? this.cloneExternalPoseVector(rigidPose.orbitPoint) : null,
+				zoom: Number.isFinite(rigidPose.zoom) ? rigidPose.zoom : null,
+			};
+		}
+
 		const position = controls.getPosition(new THREE.Vector3(), true);
-		const target = controls.getTarget(new THREE.Vector3(), true);
+		const quaternion =
+			typeof controls.getQuaternion === "function"
+				? controls.getQuaternion(new THREE.Quaternion(), true)
+				: controls.camera?.quaternion;
+		const target =
+			typeof controls.getTarget === "function"
+				? controls.getTarget(new THREE.Vector3(), true)
+				: null;
+		if(!position || (!quaternion && !target)){
+			return null;
+		}
+
+		if(!quaternion && target){
+			return {
+				// 兼容旧 controls 和外部项目：没有 quaternion 时才回退到 position + target。
+				mode: "legacy-look-at",
+				position: this.cloneExternalPoseVector(position),
+				target: this.cloneExternalPoseVector(target),
+				orbitPoint: this.cloneExternalPoseVector(target),
+				zoom: controls.camera?.isOrthographicCamera ? controls.camera.zoom : null,
+			};
+		}
 
 		return {
+			mode: "rigid",
 			position: this.cloneExternalPoseVector(position),
-			target: this.cloneExternalPoseVector(target),
+			quaternion: this.cloneExternalPoseQuaternion(quaternion),
+			orbitPoint: target ? this.cloneExternalPoseVector(target) : null,
 			zoom: controls.camera?.isOrthographicCamera ? controls.camera.zoom : null,
 		};
 	}
 
-	// 判断某个 controls 是否具备通过 position + target 接收外部位姿的能力。
+	// 判断某个 controls 是否具备接收外部位姿的能力，优先走 FJD 刚体 pose。
 	canApplyExternalControlsPose(controls){
-		return !!controls && typeof controls.setLookAt === "function";
+		return !!controls && (
+			typeof controls.setRigidPose === "function" ||
+			typeof controls.setLookAt === "function"
+		);
 	}
 
 	// 把统一位姿应用到目标 controls。
@@ -1275,13 +1344,24 @@ export class Viewer extends EventDispatcher{
 			return false;
 		}
 
+		if(typeof controls.setRigidPose === "function" && pose.position && pose.quaternion){
+			// 当前主项目使用 FJD 刚体模型，同步时以 quaternion 为朝向事实来源。
+			controls.setRigidPose(pose, animation);
+			return true;
+		}
+
+		const target = pose.orbitPoint ?? pose.target;
+		if(!target || typeof controls.setLookAt !== "function"){
+			return false;
+		}
+
 		controls.setLookAt(
 			pose.position.x,
 			pose.position.y,
 			pose.position.z,
-			pose.target.x,
-			pose.target.y,
-			pose.target.z,
+			target.x,
+			target.y,
+			target.z,
 			animation,
 		);
 
@@ -1311,7 +1391,7 @@ export class Viewer extends EventDispatcher{
 	}
 
 	// 从外部 controls 实例同步位姿。
-	// 与 R3F 侧的 cameraPoseBridge 保持一致，统一同步 position + target + zoom。
+	// 与 R3F 侧的 cameraPoseBridge 保持一致，优先同步 position + quaternion。
 	setFromR3fCameraControls(sourceControls = window.parent?.r3fCameraControls, animation = true){
 		const targetControls = this.resolveExternalCameraControlsBridgeTarget();
 		const pose = this.readExternalControlsPose(sourceControls);
