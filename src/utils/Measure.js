@@ -905,7 +905,9 @@ export class Measure extends THREE.Object3D {
 				let coordinateLabel = this.coordinateLabels[0];
 
 				if (!!coordinateLabel) {
-					const offset = this.viewer.scene?.pointclouds[0]?.userData?.offset;
+					// 坐标标签展示要使用原始坐标偏移，旧版 offset 仅作为未升级数据的兼容回退。
+					const pointcloudUserData = this.viewer.scene?.pointclouds[0]?.userData;
+					const offset = pointcloudUserData?.coordinateOffset ?? pointcloudUserData?.offset;
 					if(!!offset){
 						const _position = position.clone().subVectors(position.clone(), offset);
 						let msg = _position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");

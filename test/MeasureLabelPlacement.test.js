@@ -51,6 +51,23 @@ describe("Measure label placement", () => {
 		expect(measure.edgeLabels[0].offsetY).toBe(-10);
 	});
 
+	it("坐标标签应优先使用 coordinateOffset 还原原始坐标", () => {
+		const viewer = createViewer();
+		viewer.scene.pointclouds = [{
+			userData: {
+				offset: new THREE.Vector3(1, 1, 1),
+				// coordinateOffset 是 R3F 坐标显示语义，不能被对象真实平移量覆盖。
+				coordinateOffset: new THREE.Vector3(10, 20, 30),
+			},
+		}];
+		const measure = new Measure(viewer);
+
+		measure.addMarker(new THREE.Vector3(11, 22, 33));
+		measure.update();
+
+		expect(measure.coordinateLabels[0].text).toBe("1.00 / 2.00 / 3.00");
+	});
+
 	it("三角形三个角度标签都应位于三角形外侧", () => {
 		// 通过比较标签方向与重心方向，确保角度标签始终沿外侧显示。
 		const viewer = createViewer();

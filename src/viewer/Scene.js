@@ -27,6 +27,7 @@ export class Scene extends EventDispatcher{
 		this.overrideCamera = null;
 		this.pointclouds = [];
 		this.groupOffsets = new Map();
+		this.groupCoordinateOffsets = new Map();
 
 		this.measurements = [];
 		this.profiles = [];
@@ -136,6 +137,32 @@ export class Scene extends EventDispatcher{
 		return box;
 	}
 
+	getR3FPointCloudCoordinateOffset(pointcloud){
+		// 与 R3F 基座点云保持一致：XY 使用 tightBoundingBox 的世界中心，Z 优先使用 metadata.offset[2]。
+		const center = this.getBoundingBox4One(pointcloud).getCenter(new THREE.Vector3());
+		const metadataOffsetZ = Number(pointcloud.pcoGeometry?.loader?.metadata?.offset?.[2]);
+
+		if (Number.isFinite(metadataOffsetZ)) {
+			center.z = metadataOffsetZ;
+		}
+
+		return center;
+	}
+
+	applyR3FPointCloudTransform(pointcloud){
+		// 与 R3F 当前流程保持一致：先执行 moveToOrigin，再按 tightBoundingBox 的 min.z 贴地。
+		pointcloud.position.set(0, 0, 0);
+		pointcloud.updateMatrixWorld(true);
+
+		const originBox = this.getBoundingBox4One(pointcloud);
+		pointcloud.position.set(0, 0, 0).sub(originBox.getCenter(new THREE.Vector3()));
+		pointcloud.updateMatrixWorld(true);
+
+		const groundBox = this.getBoundingBox4One(pointcloud);
+		pointcloud.position.z += -groundBox.min.z;
+		pointcloud.updateMatrixWorld(true);
+	}
+
 	addPointCloud (pointcloud, translateToCenter = true) {
 		this.pointclouds.push(pointcloud);
 		this.scenePointCloud.add(pointcloud);
@@ -145,33 +172,34 @@ export class Scene extends EventDispatcher{
 			const cacheKey = pointcloud.sourceCacheKey;
 			const oldPosition = pointcloud.position.clone();
 			
-			let targetPosition = null;
+			let coordinateOffset = null;
 
 			// 如果是组模式且已有缓存的共享位移，则直接应用该位移
 			if (sourceMode?.sourceKind === 'group' && cacheKey && this.groupOffsets.has(cacheKey)) {
 				const sharedOffset = this.groupOffsets.get(cacheKey);
-				targetPosition = oldPosition.clone().add(sharedOffset);
+				pointcloud.position.copy(oldPosition.clone().add(sharedOffset));
+				coordinateOffset = this.groupCoordinateOffsets.get(cacheKey)?.clone() ?? this.getR3FPointCloudCoordinateOffset(pointcloud);
 			} else {
-				// 计算新的中心点（保留原有计算逻辑）
-				const size = this.getBoundingBox4One(pointcloud).getSize();
-				targetPosition = new THREE.Vector3(-size.x / 2, -size.y / 2, 0);
+				// 首次加载按 R3F 当前顺序计算坐标 offset，再执行 moveToOrigin 与 Z 贴地。
+				coordinateOffset = this.getR3FPointCloudCoordinateOffset(pointcloud);
+				this.applyR3FPointCloudTransform(pointcloud);
 				
 				// 如果是组模式的第一个点云，记录产生的位移量（New - Old）供后续同步
 				if (sourceMode?.sourceKind === 'group' && cacheKey) {
-					const offset = targetPosition.clone().sub(oldPosition);
+					// 组模式缓存第一份平移量和坐标 offset，后续同组点云复用同一套场景坐标系。
+					const offset = pointcloud.position.clone().sub(oldPosition);
 					this.groupOffsets.set(cacheKey, offset);
+					this.groupCoordinateOffsets.set(cacheKey, coordinateOffset.clone());
 				}
 			}
 
-			// 应用目标位置
-			pointcloud.position.copy(targetPosition);
-
-			// 为每个点云计算并保留它自己的 offset，链路保持不变
+			// offset 表示点云对象真实平移量，coordinateOffset 表示坐标数值显示使用的原始坐标偏移。
 			if (!pointcloud.userData) {
 				pointcloud.userData = {};
 			}
 			const newPosition = pointcloud.position.clone();
 			pointcloud.userData.offset = newPosition.subVectors(newPosition, oldPosition);
+			pointcloud.userData.coordinateOffset = coordinateOffset;
 		}
 
 		this.dispatchEvent({
