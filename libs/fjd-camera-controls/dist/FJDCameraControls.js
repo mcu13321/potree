@@ -233,7 +233,8 @@ var ACTION = Object.freeze({
   TOUCH_TRUCK: BASE_ACTION.TRUCK,
   TOUCH_DOLLY: BASE_ACTION.DOLLY,
   TOUCH_ZOOM: BASE_ACTION.ZOOM,
-  TOUCH_DOLLY_TRUCK: BASE_ACTION.DOLLY | BASE_ACTION.TRUCK
+  TOUCH_DOLLY_TRUCK: BASE_ACTION.DOLLY | BASE_ACTION.TRUCK,
+  TOUCH_ZOOM_TRUCK: BASE_ACTION.ZOOM | BASE_ACTION.TRUCK
 });
 var MOUSE_BUTTON_TO_NAME = {
   0: "left",
@@ -1588,7 +1589,7 @@ var FJDCameraControls = class extends EventDispatcher {
       const deltaDistance = distance - this._touchLastDistance;
       const shouldTruck = twoTouchAction === ACTION.TRUCK || this._includesInputAction(twoTouchAction, ACTION.TRUCK);
       const shouldDolly = twoTouchAction === ACTION.DOLLY || this._includesInputAction(twoTouchAction, ACTION.DOLLY);
-      const shouldZoom = twoTouchAction === ACTION.ZOOM;
+      const shouldZoom = twoTouchAction === ACTION.ZOOM || this._includesInputAction(twoTouchAction, ACTION.ZOOM);
       this._isPanningByUser = shouldTruck;
       this._isDollyingByUser = shouldDolly || shouldZoom;
       if (shouldTruck) {

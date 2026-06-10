@@ -27,7 +27,6 @@ export class Scene extends EventDispatcher{
 		this.overrideCamera = null;
 		this.pointclouds = [];
 		this.groupOffsets = new Map();
-		this.groupCoordinateOffsets = new Map();
 
 		this.measurements = [];
 		this.profiles = [];
@@ -172,16 +171,12 @@ export class Scene extends EventDispatcher{
 			const cacheKey = pointcloud.sourceCacheKey;
 			const oldPosition = pointcloud.position.clone();
 			
-			let coordinateOffset = null;
-
 			// 如果是组模式且已有缓存的共享位移，则直接应用该位移
 			if (sourceMode?.sourceKind === 'group' && cacheKey && this.groupOffsets.has(cacheKey)) {
 				const sharedOffset = this.groupOffsets.get(cacheKey);
 				pointcloud.position.copy(oldPosition.clone().add(sharedOffset));
-				coordinateOffset = this.groupCoordinateOffsets.get(cacheKey)?.clone() ?? this.getR3FPointCloudCoordinateOffset(pointcloud);
 			} else {
 				// 首次加载按 R3F 当前顺序计算坐标 offset，再执行 moveToOrigin 与 Z 贴地。
-				coordinateOffset = this.getR3FPointCloudCoordinateOffset(pointcloud);
 				this.applyR3FPointCloudTransform(pointcloud);
 				
 				// 如果是组模式的第一个点云，记录产生的位移量（New - Old）供后续同步
@@ -189,17 +184,15 @@ export class Scene extends EventDispatcher{
 					// 组模式缓存第一份平移量和坐标 offset，后续同组点云复用同一套场景坐标系。
 					const offset = pointcloud.position.clone().sub(oldPosition);
 					this.groupOffsets.set(cacheKey, offset);
-					this.groupCoordinateOffsets.set(cacheKey, coordinateOffset.clone());
 				}
 			}
 
-			// offset 表示点云对象真实平移量，coordinateOffset 表示坐标数值显示使用的原始坐标偏移。
+			// offset 表示点云对象真实平移量
 			if (!pointcloud.userData) {
 				pointcloud.userData = {};
 			}
 			const newPosition = pointcloud.position.clone();
 			pointcloud.userData.offset = newPosition.subVectors(newPosition, oldPosition);
-			pointcloud.userData.coordinateOffset = coordinateOffset;
 		}
 
 		this.dispatchEvent({
