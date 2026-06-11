@@ -894,6 +894,8 @@ export class Measure extends THREE.Object3D {
 
 	update () {
 		this.updateMarkers()
+		// 测量标记数字只保留固定小数位，不添加千分位逗号，避免大坐标显示为 1,234.00。
+		const formatMeasureNumberWithoutCommas = (value, fractionDigits = 2) => value.toFixed(fractionDigits);
 		if (this.points.length === 0) {
 			return;
 		} else if (this.points.length === 1) {
@@ -910,11 +912,11 @@ export class Measure extends THREE.Object3D {
 
 					if(!!offset){
 						const _position = position.clone().subVectors(position.clone(), offset);
-						let msg = _position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");
-						coordinateLabel.setText(msg);
+						let msg = _position.toArray().map(p => formatMeasureNumberWithoutCommas(p)).join(" / ");
+							coordinateLabel.setText(msg);
 						coordinateLabel.position.copy(position);
 					} else {
-						let msg = position.toArray().map(p => Utils.addCommas(p.toFixed(2))).join(" / ");
+						let msg = position.toArray().map(p => formatMeasureNumberWithoutCommas(p)).join(" / ");
 						coordinateLabel.setText(msg);
 						coordinateLabel.position.copy(position);
 					}
