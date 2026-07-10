@@ -16,6 +16,7 @@ import {Message} from "../utils/Message.js";
 import {Sidebar} from "./sidebar.js";
 
 import {AnnotationTool} from "../utils/AnnotationTool.js";
+import {MeasureMagnifier} from "../utils/MeasureMagnifier.js";
 import {MeasuringTool} from "../utils/MeasuringTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
@@ -365,6 +366,7 @@ export class Viewer extends EventDispatcher{
 
 		this.annotationTool = new AnnotationTool(this);
 		this.measuringTool = new MeasuringTool(this);
+		this.measureMagnifier = new MeasureMagnifier(this);
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);
 		this.treeTagTool = new TreeTagTool(this);
