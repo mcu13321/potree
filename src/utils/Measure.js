@@ -907,8 +907,8 @@ export class Measure extends THREE.Object3D {
 				let coordinateLabel = this.coordinateLabels[0];
 
 				if (!!coordinateLabel) {
-					const pointcloudUserData = this.viewer.scene?.pointclouds[0]?.userData;
-					const offset = pointcloudUserData.offset
+					const offset = this.viewer.scene?.getPointCloudCoordinateOffset?.()
+						?? this.viewer.scene?.pointclouds[0]?.userData?.offset;
 
 					if(!!offset){
 						const _position = position.clone().subVectors(position.clone(), offset);

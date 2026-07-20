@@ -51,15 +51,15 @@ describe("Measure label placement", () => {
 		expect(measure.edgeLabels[0].offsetY).toBe(-10);
 	});
 
-	it("坐标标签应优先使用 coordinateOffset 还原原始坐标", () => {
+	it("坐标标签应使用 Scene 共享 offset 还原原始坐标", () => {
 		const viewer = createViewer();
 		viewer.scene.pointclouds = [{
 			userData: {
 				offset: new THREE.Vector3(1, 1, 1),
-				// coordinateOffset 是 R3F 坐标显示语义，不能被对象真实平移量覆盖。
-				coordinateOffset: new THREE.Vector3(10, 20, 30),
 			},
 		}];
+		// The Scene owns the shared offset instead of relying on the first pointcloud.
+		viewer.scene.getPointCloudCoordinateOffset = () => new THREE.Vector3(10, 20, 30);
 		const measure = new Measure(viewer);
 
 		measure.addMarker(new THREE.Vector3(11, 22, 33));

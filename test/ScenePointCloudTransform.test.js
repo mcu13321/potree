@@ -58,7 +58,7 @@ describe("Scene.addPointCloud R3F transform", () => {
 
 		expectVectorClose(pointcloud.position, new THREE.Vector3(-6, -11, -3));
 		expectVectorClose(pointcloud.userData.offset, new THREE.Vector3(-106, -211, -53));
-		expectVectorClose(pointcloud.userData.coordinateOffset, new THREE.Vector3(106, 211, 700));
+		expectVectorClose(pointcloud.userData.selfTransformOffset, new THREE.Vector3(-106, -211, -53));
 	});
 
 	it("组模式下后续点云应复用第一份平移量和坐标 offset", () => {
@@ -77,8 +77,6 @@ describe("Scene.addPointCloud R3F transform", () => {
 
 		expectVectorClose(second.position, new THREE.Vector3(194, 189, 7));
 		expectVectorClose(second.userData.offset, first.userData.offset);
-		expectVectorClose(second.userData.coordinateOffset, first.userData.coordinateOffset);
-		expect(second.userData.coordinateOffset).not.toBe(first.userData.coordinateOffset);
 	});
 
 	it("关闭 translateToCenter 时不应改变点云位置和 offset", () => {
@@ -90,6 +88,53 @@ describe("Scene.addPointCloud R3F transform", () => {
 
 		expectVectorClose(pointcloud.position, oldPosition);
 		expect(pointcloud.userData.offset).toBeUndefined();
-		expect(pointcloud.userData.coordinateOffset).toBeUndefined();
+		expect(pointcloud.userData.selfTransformOffset).toBeUndefined();
+	});
+
+	it("ordinary pointclouds share the first offset and fall back to the remaining offset", () => {
+		const scene = new Scene();
+		const first = createPointcloud({position: new THREE.Vector3(100, 200, 50)});
+		const second = createPointcloud({position: new THREE.Vector3(300, 400, 60)});
+		const third = createPointcloud({position: new THREE.Vector3(500, 600, 70)});
+
+		scene.addPointCloud(first);
+		scene.addPointCloud(second);
+		scene.addPointCloud(third);
+
+		expectVectorClose(second.userData.offset, first.userData.offset);
+		expectVectorClose(third.userData.offset, first.userData.offset);
+
+		first.visible = false;
+		scene.reconcilePointCloudCoordinateOffset();
+		expectVectorClose(scene.getPointCloudCoordinateOffset(), first.userData.offset);
+
+		second.visible = false;
+		scene.reconcilePointCloudCoordinateOffset();
+		expectVectorClose(scene.getPointCloudCoordinateOffset(), third.userData.selfTransformOffset);
+		expectVectorClose(third.userData.offset, third.userData.selfTransformOffset);
+	});
+
+	it("rebase moves measurement markers and emits a single offset event", () => {
+		const scene = new Scene();
+		const first = createPointcloud({position: new THREE.Vector3(100, 200, 50)});
+		const second = createPointcloud({position: new THREE.Vector3(300, 400, 60)});
+		const measurement = {
+			points: [{position: new THREE.Vector3(1, 2, 3)}],
+			update: vi.fn(),
+		};
+		const events = [];
+
+		scene.addEventListener("pointcloud_offset_changed", (event) => events.push(event));
+		scene.addMeasurement(measurement);
+		scene.addPointCloud(first);
+		scene.addPointCloud(second);
+		first.visible = false;
+		scene.reconcilePointCloudCoordinateOffset();
+
+		const delta = second.userData.selfTransformOffset.clone().sub(first.userData.selfTransformOffset);
+		expectVectorClose(measurement.points[0].position, new THREE.Vector3(1, 2, 3).add(delta));
+		expect(measurement.update).toHaveBeenCalledOnce();
+		expect(events).toHaveLength(1);
+		expect(events[0].reason).toBe("multi-to-single");
 	});
 });

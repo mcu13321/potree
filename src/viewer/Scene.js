@@ -27,6 +27,9 @@ export class Scene extends EventDispatcher{
 		this.overrideCamera = null;
 		this.pointclouds = [];
 		this.groupOffsets = new Map();
+		this.activePointCloudTransformOffset = null;
+		this.activePointCloudOffsetAnchor = null;
+		this.pointCloudOffsetReconcileQueued = false;
 
 		this.measurements = [];
 		this.profiles = [];
@@ -162,6 +165,141 @@ export class Scene extends EventDispatcher{
 		pointcloud.updateMatrixWorld(true);
 	}
 
+	isOrdinaryPointCloud(pointcloud){
+		// Forestry group pointclouds keep their existing independent placement workflow.
+		return pointcloud?.treemindPointCloudSourceMode?.sourceKind !== 'group';
+	}
+
+	getOrdinaryPointClouds(){
+		return this.pointclouds.filter((pointcloud) => this.isOrdinaryPointCloud(pointcloud));
+	}
+
+	getPointCloudCoordinateOffset(){
+		// Expose one authoritative offset for coordinate labels and parent bridges.
+		return this.activePointCloudTransformOffset?.clone()
+			?? this.pointclouds[0]?.userData?.offset?.clone()
+			?? new THREE.Vector3();
+	}
+
+	applyPointCloudTransformOffset(pointcloud, offset){
+		// Rebuild from the source position to avoid cumulative floating-point drift.
+		const sourcePosition = pointcloud.userData?.sourcePosition;
+		if (!sourcePosition) {
+			return;
+		}
+
+		pointcloud.position.copy(sourcePosition).add(offset);
+		pointcloud.userData.appliedTransformOffset = offset.clone();
+		pointcloud.userData.offset = offset.clone();
+		pointcloud.updateMatrixWorld(true);
+	}
+
+	translateSceneObject(object, delta){
+		if (!object) {
+			return;
+		}
+
+		object.position?.add?.(delta);
+		object.cameraPosition?.add?.(delta);
+		object.cameraTarget?.add?.(delta);
+		object.update?.();
+		object.updateMatrixWorld?.(true);
+	}
+
+	rebasePointCloudCoordinateOffset(nextOffset, reason = 'multi-to-single'){
+		// Translate every scene-space consumer in one transaction when the shared offset changes.
+		const previousOffset = this.activePointCloudTransformOffset;
+		if (!previousOffset) {
+			this.activePointCloudTransformOffset = nextOffset.clone();
+			this.getOrdinaryPointClouds().forEach((pointcloud) => {
+				this.applyPointCloudTransformOffset(pointcloud, nextOffset);
+			});
+			return false;
+		}
+
+		const delta = nextOffset.clone().sub(previousOffset);
+		if (delta.lengthSq() === 0) {
+			return false;
+		}
+
+		this.getOrdinaryPointClouds().forEach((pointcloud) => {
+			this.applyPointCloudTransformOffset(pointcloud, nextOffset);
+		});
+
+		// Move the navigation state once so camera and pivot keep their world relation.
+		this.view.position.add(delta);
+		this.cameraP.position.add(delta);
+		this.cameraO.position.add(delta);
+		this.cameraVR.position.add(delta);
+
+		this.measurements.forEach((measurement) => {
+			measurement.points?.forEach((point) => point.position?.add(delta));
+			measurement.update?.();
+		});
+		this.profiles.forEach((profile) => {
+			profile.points?.forEach((point) => point.add?.(delta));
+			this.translateSceneObject(profile, delta);
+		});
+		this.volumes.forEach((volume) => this.translateSceneObject(volume, delta));
+		this.polygonClipVolumes.forEach((volume) => this.translateSceneObject(volume, delta));
+		this.annotations.traverse?.((annotation) => this.translateSceneObject(annotation, delta));
+
+		this.activePointCloudTransformOffset = nextOffset.clone();
+		this.dispatchEvent({
+			type: 'pointcloud_offset_changed',
+			previousOffset: previousOffset.clone(),
+			nextOffset: nextOffset.clone(),
+			delta: delta.clone(),
+			reason,
+		});
+
+		return true;
+	}
+
+	reconcilePointCloudCoordinateOffset(){
+		// Keep a ghost anchor while two or more ordinary pointclouds remain visible.
+		this.pointCloudOffsetReconcileQueued = false;
+		const visiblePointclouds = this.getOrdinaryPointClouds().filter((pointcloud) => pointcloud.visible);
+
+		if (visiblePointclouds.length === 0) {
+			this.activePointCloudTransformOffset = null;
+			this.activePointCloudOffsetAnchor = null;
+			return;
+		}
+
+		if (!this.activePointCloudTransformOffset) {
+			const anchor = visiblePointclouds[0];
+			const offset = anchor.userData?.selfTransformOffset;
+			if (!offset) {
+				return;
+			}
+			this.activePointCloudTransformOffset = offset.clone();
+			this.activePointCloudOffsetAnchor = anchor;
+			this.getOrdinaryPointClouds().forEach((pointcloud) => {
+				this.applyPointCloudTransformOffset(pointcloud, offset);
+			});
+			return;
+		}
+
+		if (visiblePointclouds.length === 1) {
+			const remainingPointcloud = visiblePointclouds[0];
+			this.activePointCloudOffsetAnchor = remainingPointcloud;
+			this.rebasePointCloudCoordinateOffset(
+				remainingPointcloud.userData.selfTransformOffset,
+				'multi-to-single',
+			);
+		}
+	}
+
+	queuePointCloudCoordinateOffsetReconcile(){
+		// Coalesce sequential visibility writes so only the final set drives a rebase.
+		if (this.pointCloudOffsetReconcileQueued) {
+			return;
+		}
+		this.pointCloudOffsetReconcileQueued = true;
+		queueMicrotask(() => this.reconcilePointCloudCoordinateOffset());
+	}
+
 	addPointCloud (pointcloud, translateToCenter = true) {
 		this.pointclouds.push(pointcloud);
 		this.scenePointCloud.add(pointcloud);
@@ -170,6 +308,7 @@ export class Scene extends EventDispatcher{
 			const sourceMode = pointcloud.treemindPointCloudSourceMode;
 			const cacheKey = pointcloud.sourceCacheKey;
 			const oldPosition = pointcloud.position.clone();
+			const isOrdinaryPointCloud = this.isOrdinaryPointCloud(pointcloud);
 			
 			// 如果是组模式且已有缓存的共享位移，则直接应用该位移
 			if (sourceMode?.sourceKind === 'group' && cacheKey && this.groupOffsets.has(cacheKey)) {
@@ -192,13 +331,44 @@ export class Scene extends EventDispatcher{
 				pointcloud.userData = {};
 			}
 			const newPosition = pointcloud.position.clone();
-			pointcloud.userData.offset = newPosition.subVectors(newPosition, oldPosition);
+			const selfTransformOffset = newPosition.subVectors(newPosition, oldPosition);
+			pointcloud.userData.offset = selfTransformOffset.clone();
+
+			if (isOrdinaryPointCloud) {
+				// Keep the immutable source position so repeated rebases do not accumulate error.
+				pointcloud.userData.sourcePosition = oldPosition.clone();
+				pointcloud.userData.selfTransformOffset = selfTransformOffset.clone();
+
+				if (!this.activePointCloudTransformOffset && pointcloud.visible) {
+					this.activePointCloudTransformOffset = selfTransformOffset.clone();
+					this.activePointCloudOffsetAnchor = pointcloud;
+				}
+
+				const activeOffset = this.activePointCloudTransformOffset ?? selfTransformOffset;
+				this.applyPointCloudTransformOffset(pointcloud, activeOffset);
+				pointcloud.addEventListener?.('visibility_changed', () => {
+					this.queuePointCloudCoordinateOffsetReconcile();
+				});
+			}
 		}
 
 		this.dispatchEvent({
 			type: 'pointcloud_added',
 			pointcloud: pointcloud
 		});
+	}
+
+	removePointCloud(pointcloud){
+		// Keep Scene offset state in sync with explicit pointcloud disposal.
+		const index = this.pointclouds.indexOf(pointcloud);
+		if (index === -1) {
+			return;
+		}
+
+		this.pointclouds.splice(index, 1);
+		this.scenePointCloud.remove(pointcloud);
+		this.reconcilePointCloudCoordinateOffset();
+		this.dispatchEvent({type: 'pointcloud_removed', pointcloud});
 	}
 
 	addVolume (volume) {
