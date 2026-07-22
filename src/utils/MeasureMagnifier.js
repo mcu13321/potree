@@ -1,4 +1,5 @@
 import * as THREE from '../../libs/three.js/build/three.module.js'
+import { PointSizeType } from '../defines.js'
 
 const RENDER_SIZE = 192
 const MAGNIFIER_DIAMETER_PX = 144
@@ -7,10 +8,6 @@ const POINTER_OFFSET_PX = 22
 const EDGE_MARGIN_PX = 8
 const DEFAULT_FOV = 24
 const DEFAULT_CAMERA_ZOOM = 1
-const MIN_ORTHOGRAPHIC_SPAN = 0.6
-const MAX_ORTHOGRAPHIC_SPAN = 32
-const MIN_PERSPECTIVE_FOV = 0.05
-const MAX_PERSPECTIVE_FOV = 120
 const MAGNIFIER_CIRCLE_SEGMENTS = 128
 
 const RING_OUTER_RADIUS = 1.07
@@ -60,6 +57,7 @@ export class MeasureMagnifier {
 		this._latestPoint = null
 		this._latestClientX = 0
 		this._latestClientY = 0
+		this._originalPointSizeTypes = new Map()
 
 		this._renderTarget = new THREE.WebGLRenderTarget(RENDER_SIZE, RENDER_SIZE, {
 			depthBuffer: true,
@@ -67,9 +65,8 @@ export class MeasureMagnifier {
 			stencilBuffer: false,
 		})
 		this._renderTarget.texture.generateMipmaps = false
-		if (THREE.sRGBEncoding !== undefined) {
-			this._renderTarget.texture.encoding = THREE.sRGBEncoding
-		}
+		// Match Potree's linear renderer output so CSS background colors are not decoded twice.
+		this._renderTarget.texture.encoding = THREE.LinearEncoding
 
 		this._magnifierCameras = {
 			orthographic: new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000),
@@ -81,7 +78,7 @@ export class MeasureMagnifier {
 			map: this._renderTarget.texture,
 			depthTest: false,
 			depthWrite: false,
-			transparent: true,
+			transparent: false,
 			toneMapped: false,
 		})
 		this._circleMesh = new THREE.Mesh(circleGeo, this._circleMaterial)
@@ -113,15 +110,18 @@ export class MeasureMagnifier {
 		viewer.measuringTool.scene.add(this._ringMesh)
 
 		this._onMouseMove = this._onMouseMove.bind(this)
+		this._onUpdate = this._onUpdate.bind(this)
 		this._onRenderOverlay = this._onRenderOverlay.bind(this)
 	}
 
 	start() {
 		if (this.active) return
 		this.active = true
+		this._syncPointSizeTypes()
 
 		const el = this.viewer.renderer.domElement
 		el.addEventListener('mousemove', this._onMouseMove)
+		this.viewer.addEventListener('update', this._onUpdate)
 		this.viewer.addEventListener('render.pass.end', this._onRenderOverlay)
 	}
 
@@ -131,7 +131,9 @@ export class MeasureMagnifier {
 
 		const el = this.viewer.renderer.domElement
 		el.removeEventListener('mousemove', this._onMouseMove)
+		this.viewer.removeEventListener('update', this._onUpdate)
 		this.viewer.removeEventListener('render.pass.end', this._onRenderOverlay)
+		this._restorePointSizeTypes()
 
 		this._circleMesh.visible = false
 		this._ringMesh.visible = false
@@ -147,6 +149,35 @@ export class MeasureMagnifier {
 		this._circleMesh.geometry.dispose()
 		this._ringMesh.geometry.dispose()
 		this._renderTarget.dispose()
+	}
+
+	_onUpdate() {
+		this._syncPointSizeTypes()
+	}
+
+	_syncPointSizeTypes() {
+		// Shared point-cloud materials keep stable pixel sizes in both render passes.
+		for (const pointCloud of this.viewer.scene?.pointclouds || []) {
+			const material = pointCloud?.material
+			if (!material || !('pointSizeType' in material)) continue
+
+			if (!this._originalPointSizeTypes.has(material)) {
+				this._originalPointSizeTypes.set(material, material.pointSizeType)
+			}
+			if (material.pointSizeType !== PointSizeType.FIXED) {
+				// Retain the latest non-fixed mode selected while magnification is active.
+				this._originalPointSizeTypes.set(material, material.pointSizeType)
+				material.pointSizeType = PointSizeType.FIXED
+			}
+		}
+	}
+
+	_restorePointSizeTypes() {
+		// Restore each material exactly to the mode it had before magnification started.
+		for (const [material, originalPointSizeType] of this._originalPointSizeTypes) {
+			material.pointSizeType = originalPointSizeType
+		}
+		this._originalPointSizeTypes.clear()
 	}
 
 	_onMouseMove(event) {
@@ -179,6 +210,11 @@ export class MeasureMagnifier {
 		const targetPoint = this._latestPoint
 
 		const magnifierCamera = this._configureCamera(camera, targetPoint, layout, hostRect)
+		if (!magnifierCamera) {
+			this._circleMesh.visible = false
+			this._ringMesh.visible = false
+			return
+		}
 		this._renderToTarget(magnifierCamera)
 
 		const transform = this._resolveOverlayTransform(camera, layout, hostRect)
@@ -254,11 +290,8 @@ export class MeasureMagnifier {
 		// Match the R3F orthographic lens by narrowing the visible world-space span.
 		if (sourceCamera.isOrthographicCamera) {
 			const sourceSpan = (sourceCamera.top - sourceCamera.bottom) / zoom
-			const span = clamp(
-				sourceSpan * ratio,
-				MIN_ORTHOGRAPHIC_SPAN,
-				MAX_ORTHOGRAPHIC_SPAN
-			)
+			const span = sourceSpan * ratio
+			if (!Number.isFinite(span) || span <= 0) return null
 			const halfSpan = span / 2
 			const camera = this._magnifierCameras.orthographic
 			camera.left = -halfSpan
@@ -276,22 +309,30 @@ export class MeasureMagnifier {
 		}
 
 		const sourceDistance = Math.max(sourceCamera.position.distanceTo(target), 1)
-		const halfFov = THREE.MathUtils.degToRad((sourceCamera.fov || DEFAULT_FOV) / 2)
-		const effectiveFov = 2 * Math.atan(Math.tan(halfFov) / zoom)
-		const sourceViewHeight = 2 * Math.tan(effectiveFov / 2) * sourceDistance
+		const effectiveFov = typeof sourceCamera.getEffectiveFOV === 'function'
+			? sourceCamera.getEffectiveFOV()
+			: THREE.MathUtils.radToDeg(2 * Math.atan(
+				Math.tan(THREE.MathUtils.degToRad(sourceCamera.fov || DEFAULT_FOV) / 2) / zoom
+			))
+		if (!Number.isFinite(effectiveFov) || effectiveFov <= 0) return null
+		const sourceViewHeight = 2 * Math.tan(
+			THREE.MathUtils.degToRad(effectiveFov) / 2
+		) * sourceDistance
 		const targetViewHeight = sourceViewHeight * ratio
 		const targetFov = THREE.MathUtils.radToDeg(
 			2 * Math.atan(targetViewHeight / 2 / sourceDistance)
 		)
+		if (!Number.isFinite(targetFov) || targetFov <= 0) return null
 
 		const camera = this._magnifierCameras.perspective
 		camera.aspect = 1
 		camera.far = sourceCamera.far
-		camera.fov = clamp(targetFov, MIN_PERSPECTIVE_FOV, MAX_PERSPECTIVE_FOV)
+		camera.fov = targetFov
 		camera.near = sourceCamera.near
 		camera.position.copy(sourceCamera.position)
 		camera.up.copy(sourceCamera.up)
-		camera.zoom = zoom
+		// Source zoom is already represented by the effective FOV above.
+		camera.zoom = DEFAULT_CAMERA_ZOOM
 		camera.lookAt(target)
 		camera.updateProjectionMatrix()
 		camera.updateMatrixWorld()
@@ -305,8 +346,31 @@ export class MeasureMagnifier {
 
 		const previousTarget = renderer.getRenderTarget()
 		const previousAutoClear = renderer.autoClear
+		const previousClearColor = renderer.getClearColor(new THREE.Color())
+		const previousClearAlpha = renderer.getClearAlpha()
 		const previousCircleVisible = this._circleMesh.visible
 		const previousRingVisible = this._ringMesh.visible
+		const savedSphereScales = []
+		const skyboxCamera = this.viewer.background === 'skybox'
+			? this.viewer.skybox?.camera
+			: null
+		const savedSkyboxState = skyboxCamera
+			? {
+				aspect: skyboxCamera.aspect,
+				fov: skyboxCamera.fov,
+				rotation: skyboxCamera.rotation.clone(),
+			}
+			: null
+
+		// Compensate fixed-size measurement markers for the 2x magnified scene.
+		for (const measurement of scene.measurements || []) {
+			for (const sphere of measurement?.spheres || []) {
+				if (!sphere?.scale) continue
+				const {x, y, z} = sphere.scale
+				savedSphereScales.push({sphere, x, y, z})
+				sphere.scale.multiplyScalar(1 / MAGNIFICATION)
+			}
+		}
 
 		// Exclude the lens meshes while rendering their shared measurement scene.
 		this._circleMesh.visible = false
@@ -315,19 +379,8 @@ export class MeasureMagnifier {
 		// Always restore renderer and overlay state after the off-screen pass.
 		try {
 			renderer.setRenderTarget(this._renderTarget)
-			// Clear once explicitly, then compose background, point cloud, and measurement passes.
 			renderer.autoClear = false
-			renderer.clear(true, true, true)
-
-			if (this.viewer.background === 'skybox' && magnifierCamera.isPerspectiveCamera) {
-				this.viewer.skybox.camera.rotation.copy(magnifierCamera.rotation)
-				this.viewer.skybox.camera.fov = magnifierCamera.fov
-				this.viewer.skybox.camera.aspect = 1
-				this.viewer.skybox.camera.updateProjectionMatrix()
-				renderer.render(this.viewer.skybox.scene, this.viewer.skybox.camera)
-			} else if (this.viewer.background === 'gradient') {
-				renderer.render(scene.sceneBG, scene.cameraBG)
-			}
+			this._renderBackground(magnifierCamera, previousClearColor)
 
 			pRenderer.render(scene.scenePointCloud, magnifierCamera, this._renderTarget, {
 				clipSpheres: scene.volumes.filter(
@@ -339,10 +392,56 @@ export class MeasureMagnifier {
 			renderer.clearDepth()
 			renderer.render(this.viewer.measuringTool.scene, magnifierCamera)
 		} finally {
+			// Restore the exact marker scales after the off-screen pass.
+			for (const {sphere, x, y, z} of savedSphereScales) {
+				sphere.scale.set(x, y, z)
+			}
+			if (skyboxCamera && savedSkyboxState) {
+				// Keep the shared skybox camera unchanged for later render-pass listeners.
+				skyboxCamera.aspect = savedSkyboxState.aspect
+				skyboxCamera.fov = savedSkyboxState.fov
+				skyboxCamera.rotation.copy(savedSkyboxState.rotation)
+				skyboxCamera.updateProjectionMatrix()
+				skyboxCamera.updateMatrixWorld()
+			}
 			renderer.setRenderTarget(previousTarget)
+			renderer.setClearColor(previousClearColor, previousClearAlpha)
 			renderer.autoClear = previousAutoClear
 			this._circleMesh.visible = previousCircleVisible
 			this._ringMesh.visible = previousRingVisible
+		}
+	}
+
+	_renderBackground(magnifierCamera, fallbackColor) {
+		const renderer = this.viewer.renderer
+		const scene = this.viewer.scene
+		const backgroundColor = fallbackColor.clone()
+		const canvasBackground = renderer.domElement?.style?.backgroundColor
+
+		// CSS-backed Potree backgrounds must be copied into the off-screen render target.
+		if (this.viewer.background === 'black') {
+			backgroundColor.setHex(0x000000)
+		} else if (this.viewer.background === 'white') {
+			backgroundColor.setHex(0xffffff)
+		} else if (this.viewer.background === 'skybox' || this.viewer.background === 'gradient') {
+			backgroundColor.setHex(0x000000)
+		} else if (canvasBackground) {
+			backgroundColor.setStyle(canvasBackground)
+		}
+
+		renderer.setClearColor(backgroundColor, 1)
+		renderer.clear(true, true, true)
+
+		if (this.viewer.background === 'skybox') {
+			this.viewer.skybox.camera.rotation.copy(magnifierCamera.rotation)
+			if (magnifierCamera.isPerspectiveCamera) {
+				this.viewer.skybox.camera.fov = magnifierCamera.fov
+			}
+			this.viewer.skybox.camera.aspect = 1
+			this.viewer.skybox.camera.updateProjectionMatrix()
+			renderer.render(this.viewer.skybox.scene, this.viewer.skybox.camera)
+		} else if (this.viewer.background === 'gradient') {
+			renderer.render(scene.sceneBG, scene.cameraBG)
 		}
 	}
 
@@ -366,7 +465,15 @@ export class MeasureMagnifier {
 			visibleHeight = (camera.top - camera.bottom) / camera.zoom
 			visibleWidth = (camera.right - camera.left) / camera.zoom
 		} else {
-			visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * distance
+			// Use the effective FOV so the overlay keeps its pixel size when camera zoom changes.
+			const effectiveFov = typeof camera.getEffectiveFOV === 'function'
+				? camera.getEffectiveFOV()
+				: THREE.MathUtils.radToDeg(2 * Math.atan(
+					Math.tan(THREE.MathUtils.degToRad(camera.fov || DEFAULT_FOV) / 2) /
+					(camera.zoom || DEFAULT_CAMERA_ZOOM)
+				))
+			if (!Number.isFinite(effectiveFov) || effectiveFov <= 0) return null
+			visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(effectiveFov) / 2) * distance
 			visibleWidth = visibleHeight * camera.aspect
 		}
 

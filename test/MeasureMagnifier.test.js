@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from '../libs/three.js/build/three.module.js'
+import { PointSizeType } from '../src/defines.js'
 import { MeasureMagnifier } from '../src/utils/MeasureMagnifier.js'
 
 function createViewer() {
@@ -16,6 +17,9 @@ function createViewer() {
 		},
 		measuringTool: {
 			scene: new THREE.Scene(),
+		},
+		scene: {
+			pointclouds: [],
 		},
 		removeEventListener(type) {
 			viewerListeners.delete(type)
@@ -36,12 +40,14 @@ function createViewer() {
 }
 
 describe('MeasureMagnifier', () => {
-	it('uses a transparent circular image and shader-based ring', () => {
+	it('uses an opaque circular image and transparent shader-based ring', () => {
 		const viewer = createViewer()
 		const magnifier = new MeasureMagnifier(viewer)
 
 		expect(magnifier._circleMesh.geometry.type).toBe('CircleGeometry')
-		expect(magnifier._circleMaterial.transparent).toBe(true)
+		expect(magnifier._circleMaterial.transparent).toBe(false)
+		// Potree's main renderer outputs linear values, so the lens target must not decode again.
+		expect(magnifier._renderTarget.texture.encoding).toBe(THREE.LinearEncoding)
 		expect(magnifier._ringMaterial.type).toBe('ShaderMaterial')
 		expect(magnifier._ringMaterial.transparent).toBe(true)
 
@@ -70,8 +76,10 @@ describe('MeasureMagnifier', () => {
 		const layout = {diameter: 144}
 		const hostRect = {height: 900}
 		const perspective = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000)
+		perspective.zoom = 2.5
 		perspective.position.set(0, 0, 10)
 		perspective.lookAt(target)
+		perspective.updateProjectionMatrix()
 		perspective.updateMatrixWorld()
 
 		const perspectiveLens = magnifier._configureCamera(
@@ -83,12 +91,21 @@ describe('MeasureMagnifier', () => {
 
 		expect(perspectiveLens.isPerspectiveCamera).toBe(true)
 		expect(perspectiveLens.fov).toBeLessThan(perspective.fov)
+		expect(perspectiveLens.zoom).toBe(1)
 		expect(perspectiveLens.position.equals(perspective.position)).toBe(true)
+		const sourceViewHeight = 2 * Math.tan(
+			THREE.MathUtils.degToRad(perspective.getEffectiveFOV()) / 2
+		) * 10
+		const lensViewHeight = 2 * Math.tan(
+			THREE.MathUtils.degToRad(perspectiveLens.getEffectiveFOV()) / 2
+		) * 10
+		expect(lensViewHeight).toBeCloseTo(sourceViewHeight * 144 / 900 / 2)
 
 		const orthographic = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000)
 		orthographic.position.set(0, 0, 10)
-		orthographic.zoom = 2
+		orthographic.zoom = 1000
 		orthographic.lookAt(target)
+		orthographic.updateProjectionMatrix()
 		orthographic.updateMatrixWorld()
 
 		const orthographicLens = magnifier._configureCamera(
@@ -99,9 +116,53 @@ describe('MeasureMagnifier', () => {
 		)
 
 		expect(orthographicLens.isOrthographicCamera).toBe(true)
-		expect(orthographicLens.top - orthographicLens.bottom).toBeCloseTo(0.8)
+		expect(orthographicLens.top - orthographicLens.bottom).toBeCloseTo(0.0016)
+		expect(orthographicLens.top - orthographicLens.bottom).toBeLessThan(0.6)
 		expect(orthographicLens.position.equals(orthographic.position)).toBe(true)
 
+		magnifier.destroy()
+	})
+
+	it('keeps the overlay diameter stable for a zoomed perspective camera', () => {
+		const viewer = createViewer()
+		const magnifier = new MeasureMagnifier(viewer)
+		const camera = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 1000)
+		camera.zoom = 2.5
+		camera.position.set(0, 0, 10)
+		camera.lookAt(0, 0, 0)
+		camera.updateProjectionMatrix()
+		camera.updateMatrixWorld()
+		const hostRect = {width: 800, height: 600}
+		const layout = {centerX: 400, centerY: 300, diameter: 144}
+
+		// Project the world-space lens edges to verify the fixed screen-space diameter.
+		const transform = magnifier._resolveOverlayTransform(camera, layout, hostRect)
+		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion)
+		const leftNdc = transform.center.clone().addScaledVector(right, -transform.radius).project(camera)
+		const rightNdc = transform.center.clone().addScaledVector(right, transform.radius).project(camera)
+		const projectedDiameter = (rightNdc.x - leftNdc.x) * hostRect.width / 2
+
+		expect(projectedDiameter).toBeCloseTo(layout.diameter)
+		magnifier.destroy()
+	})
+
+	it('rejects an invalid perspective projection', () => {
+		const viewer = createViewer()
+		const magnifier = new MeasureMagnifier(viewer)
+		const camera = new THREE.PerspectiveCamera(0, 1, 0.1, 1000)
+		camera.position.set(0, 0, 10)
+		camera.lookAt(0, 0, 0)
+		camera.updateProjectionMatrix()
+		camera.updateMatrixWorld()
+
+		const result = magnifier._configureCamera(
+			camera,
+			new THREE.Vector3(0, 0, 0),
+			{diameter: 144},
+			{height: 900}
+		)
+
+		expect(result).toBeNull()
 		magnifier.destroy()
 	})
 
@@ -121,27 +182,53 @@ describe('MeasureMagnifier', () => {
 	it('renders the measurement overlay while excluding the lens meshes from its target', () => {
 		const viewer = createViewer()
 		const previousTarget = {name: 'main-target'}
+		const previousClearColor = new THREE.Color('#123456')
+		let currentClearColor = previousClearColor.clone()
+		let currentClearAlpha = 0.25
+		let currentTarget = previousTarget
+		let magnifierClearColor = null
+		let magnifierClearAlpha = null
 		let overlayAutoClear = null
 		let overlayVisibility = null
+		let overlayMarkerScale = null
 		let magnifier
+		// Use a non-uniform source scale to prove exact restoration after rendering.
+		const marker = new THREE.Sprite()
+		marker.scale.set(2, 3, 1)
 
 		viewer.scene = {
+			measurements: [{spheres: [marker]}],
 			scenePointCloud: new THREE.Scene(),
 			volumes: [],
 		}
+		viewer.renderer.domElement.style = {backgroundColor: '#494946'}
 		viewer.pRenderer = {render: vi.fn()}
 		Object.assign(viewer.renderer, {
 			autoClear: false,
-			clear: vi.fn(),
+			clear: vi.fn(() => {
+				if (currentTarget === magnifier?._renderTarget) {
+					magnifierClearColor = currentClearColor.getHexString()
+					magnifierClearAlpha = currentClearAlpha
+				}
+			}),
 			clearDepth: vi.fn(),
+			getClearAlpha: vi.fn(() => currentClearAlpha),
+			getClearColor: vi.fn((target) => target.copy(currentClearColor)),
 			getRenderTarget: vi.fn(() => previousTarget),
 			render: vi.fn((scene) => {
 				if (scene === viewer.measuringTool.scene) {
 					overlayAutoClear = viewer.renderer.autoClear
 					overlayVisibility = [magnifier._circleMesh.visible, magnifier._ringMesh.visible]
+					overlayMarkerScale = marker.scale.toArray()
 				}
 			}),
-			setRenderTarget: vi.fn(),
+			setClearColor: vi.fn((color, alpha) => {
+				currentClearColor = new THREE.Color(color)
+				currentClearAlpha = alpha
+			}),
+			setRenderTarget: vi.fn((target) => {
+				currentTarget = target
+			}),
 		})
 
 		magnifier = new MeasureMagnifier(viewer)
@@ -161,10 +248,53 @@ describe('MeasureMagnifier', () => {
 		expect(viewer.renderer.render).toHaveBeenCalledWith(viewer.measuringTool.scene, camera)
 		expect(overlayAutoClear).toBe(false)
 		expect(overlayVisibility).toEqual([false, false])
+		expect(overlayMarkerScale).toEqual([1, 1.5, 0.5])
+		expect(magnifierClearColor).toBe('494946')
+		expect(magnifierClearAlpha).toBe(1)
+		expect(marker.scale.toArray()).toEqual([2, 3, 1])
 		expect(magnifier._circleMesh.visible).toBe(true)
 		expect(magnifier._ringMesh.visible).toBe(true)
 		expect(viewer.renderer.setRenderTarget).toHaveBeenLastCalledWith(previousTarget)
 		expect(viewer.renderer.autoClear).toBe(false)
+		expect(currentClearColor.getHexString()).toBe(previousClearColor.getHexString())
+		expect(currentClearAlpha).toBe(0.25)
+
+		magnifier.destroy()
+	})
+
+	it('restores the shared skybox camera after the off-screen render', () => {
+		const viewer = createViewer()
+		const skyboxCamera = new THREE.PerspectiveCamera(70, 1.5, 0.1, 1000)
+		skyboxCamera.rotation.set(0.1, 0.2, 0.3)
+		const originalSkyboxRotation = skyboxCamera.rotation.clone()
+		viewer.background = 'skybox'
+		viewer.skybox = {camera: skyboxCamera, scene: new THREE.Scene()}
+		viewer.scene = {
+			measurements: [],
+			scenePointCloud: new THREE.Scene(),
+			volumes: [],
+		}
+		viewer.pRenderer = {render: vi.fn()}
+		Object.assign(viewer.renderer, {
+			autoClear: false,
+			clear: vi.fn(),
+			clearDepth: vi.fn(),
+			getClearAlpha: vi.fn(() => 0.25),
+			getClearColor: vi.fn((target) => target.setHex(0x123456)),
+			getRenderTarget: vi.fn(() => null),
+			render: vi.fn(),
+			setClearColor: vi.fn(),
+			setRenderTarget: vi.fn(),
+		})
+		const magnifier = new MeasureMagnifier(viewer)
+		const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000)
+
+		magnifier._renderToTarget(camera)
+
+		// The shared skybox camera must remain unchanged for later render-pass listeners.
+		expect(skyboxCamera.fov).toBe(70)
+		expect(skyboxCamera.aspect).toBe(1.5)
+		expect(skyboxCamera.rotation.equals(originalSkyboxRotation)).toBe(true)
 
 		magnifier.destroy()
 	})
@@ -175,11 +305,48 @@ describe('MeasureMagnifier', () => {
 
 		magnifier.start()
 		expect(viewer._domListeners.has('mousemove')).toBe(true)
+		expect(viewer._viewerListeners.has('update')).toBe(true)
 		expect(viewer._viewerListeners.has('render.pass.end')).toBe(true)
 
 		magnifier.stop()
 		expect(viewer._domListeners.has('mousemove')).toBe(false)
+		expect(viewer._viewerListeners.has('update')).toBe(false)
 		expect(viewer._viewerListeners.has('render.pass.end')).toBe(false)
+
+		magnifier.destroy()
+	})
+
+	it('uses fixed point sizes while active and restores every material mode', () => {
+		const viewer = createViewer()
+		const adaptiveMaterial = {pointSizeType: PointSizeType.ADAPTIVE}
+		const fixedMaterial = {pointSizeType: PointSizeType.FIXED}
+		viewer.scene.pointclouds.push(
+			{material: adaptiveMaterial},
+			{material: fixedMaterial},
+		)
+		const magnifier = new MeasureMagnifier(viewer)
+
+		magnifier.start()
+
+		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.FIXED)
+		expect(fixedMaterial.pointSizeType).toBe(PointSizeType.FIXED)
+
+		// Synchronize point clouds loaded after the magnifier has started.
+		const lateMaterial = {pointSizeType: PointSizeType.ADAPTIVE}
+		viewer.scene.pointclouds.push({material: lateMaterial})
+		viewer._viewerListeners.get('update')()
+		expect(lateMaterial.pointSizeType).toBe(PointSizeType.FIXED)
+
+		// Preserve a point-size mode selected while magnification is active.
+		adaptiveMaterial.pointSizeType = PointSizeType.ATTENUATED
+		viewer._viewerListeners.get('update')()
+		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.FIXED)
+
+		magnifier.stop()
+
+		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.ATTENUATED)
+		expect(fixedMaterial.pointSizeType).toBe(PointSizeType.FIXED)
+		expect(lateMaterial.pointSizeType).toBe(PointSizeType.ADAPTIVE)
 
 		magnifier.destroy()
 	})
