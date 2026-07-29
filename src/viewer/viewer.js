@@ -22,6 +22,7 @@ import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
 import {TreeTagTool} from "../utils/TreeTagTool.js";
 import {TrackPointTool} from "../utils/TrackPointTool.js";
+import {DefectMarkerTool} from "../utils/DefectMarkerTool.js";
 import {RectangleSVGTool} from "../utils/RectangleSVGTool.js";
 import {PolygonSVGTool} from "../utils/PolygonSVGTool.js";
 import {
@@ -371,6 +372,7 @@ export class Viewer extends EventDispatcher{
 		this.volumeTool = new VolumeTool(this);
 		this.treeTagTool = new TreeTagTool(this);
 		this.trackPointTool = new TrackPointTool(this);
+		this.defectMarkerTool = new DefectMarkerTool(this);
 		this.rectangleSVGTool = new RectangleSVGTool(this);
 		this.polygonSVGTool = new PolygonSVGTool(this);
 		
@@ -813,6 +815,31 @@ export class Viewer extends EventDispatcher{
 	/** 清空 Potree 内部维护的轨迹点渲染数据。 */
 	clearTrackPointData () {
 		this.trackPointTool?.clear();
+	};
+
+	/** Replace the defect markers rendered by the Potree-owned HTML overlay. */
+	setDefectMarkerData (markers) {
+		this.defectMarkerTool?.setData(markers);
+	};
+
+	/** Control visibility without discarding the current defect marker data. */
+	setDefectMarkerVisible (visible) {
+		this.defectMarkerTool?.setVisible(visible);
+	};
+
+	/** Select at most one defect marker and update its active halo. */
+	setDefectMarkerActive (markerId) {
+		this.defectMarkerTool?.setActiveMarker(markerId);
+	};
+
+	/** Focus the active camera controls on one defect marker position. */
+	focusDefectMarker (markerId) {
+		this.defectMarkerTool?.focusMarker(markerId);
+	};
+
+	/** Remove all defect marker HTML managed by Potree. */
+	clearDefectMarkerData () {
+		this.defectMarkerTool?.clear();
 	};
 
 	hasVisibleEDLEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
