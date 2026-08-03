@@ -361,6 +361,54 @@ describe("FJDCameraControls", () => {
 		}
 	});
 
+	it("顶视图适配应支持自定义视口占比", () => {
+		const {camera, domElement} = createCameraAndDom();
+		const controls = new FJDCameraControls(camera, domElement);
+		const box = new THREE.Box3(
+			new THREE.Vector3(-10, -20, 0),
+			new THREE.Vector3(10, 20, 30),
+		);
+
+		controls.fitToTopViewBox(box, false, {viewportOccupancy: 0.8});
+
+		const corners = [
+			new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+			new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+			new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+			new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+			new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+			new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+			new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+			new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+		];
+		const projectedOccupancy = Math.max(
+			...corners.flatMap((corner) => {
+				const projected = corner.clone().project(camera);
+				return [Math.abs(projected.x), Math.abs(projected.y)];
+			}),
+		);
+
+		expect(projectedOccupancy).toBeCloseTo(0.8, 6);
+	});
+
+	it("顶视图适配的无效视口占比应回退到默认边距", () => {
+		const box = new THREE.Box3(
+			new THREE.Vector3(-10, -20, 0),
+			new THREE.Vector3(10, 20, 30),
+		);
+		const {camera: defaultCamera, domElement: defaultDomElement} = createCameraAndDom();
+		const defaultControls = new FJDCameraControls(defaultCamera, defaultDomElement);
+		const {camera: fallbackCamera, domElement: fallbackDomElement} = createCameraAndDom();
+		const fallbackControls = new FJDCameraControls(fallbackCamera, fallbackDomElement);
+
+		defaultControls.fitToTopViewBox(box, false);
+		fallbackControls.fitToTopViewBox(box, false, {viewportOccupancy: 0});
+
+		expect(fallbackCamera.position.distanceTo(defaultCamera.position)).toBeLessThan(1e-9);
+		expect(fallbackCamera.quaternion.angleTo(defaultCamera.quaternion)).toBeLessThan(1e-9);
+		expect(fallbackCamera.zoom).toBe(defaultCamera.zoom);
+	});
+
 	it("顶视图动画应逐帧收敛到目标位姿而不是立刻跳到最终位置", () => {
 		const {camera, domElement, scene} = createCameraAndDom();
 		const controls = new FJDCameraControls(camera, domElement);
@@ -493,6 +541,20 @@ describe("FJDCameraControls", () => {
 		}
 
 		expect(camera.zoom).toBeCloseTo(controls._zoomEnd, 3);
+	});
+
+	it("正交相机顶视图适配应支持自定义视口占比", () => {
+		const {camera, domElement} = createOrthographicCameraAndDom();
+		const controls = new FJDCameraControls(camera, domElement);
+		const box = new THREE.Box3(
+			new THREE.Vector3(-10, -20, 0),
+			new THREE.Vector3(10, 20, 30),
+		);
+
+		controls.fitToTopViewBox(box, false, {viewportOccupancy: 0.8});
+
+		const projected = box.max.clone().project(camera);
+		expect(Math.abs(projected.y)).toBeCloseTo(0.8, 6);
 	});
 
 	it("getSpherical 应返回与当前位置和旋转中心一致的球坐标", () => {

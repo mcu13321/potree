@@ -1214,7 +1214,7 @@ export class Viewer extends EventDispatcher{
 		this.fitToScreen();
 	};
 
-	setTopView4CameraControls(animation = true){
+	setTopView4CameraControls(animation = true, options = {}){
 		const activeControls =
 			this.controls?.usesRigidTopViewFit === true
 				? this.controls
@@ -1235,7 +1235,7 @@ export class Viewer extends EventDispatcher{
 			typeof activeControls.fitToTopViewBox === "function"
 		) {
 			// fjd-controls 走刚体相机模型，直接切到包围盒顶视图位姿。
-			activeControls.fitToTopViewBox(box, animation);
+			activeControls.fitToTopViewBox(box, animation, options);
 		} else {
 			// 旧 cameraControls 继续沿用原有 top-view 链路，避免影响现有项目。
 			activeControls.normalizeRotations().reset(animation);

@@ -253,6 +253,12 @@ var DEFAULT_ROTATION_REST_THRESHOLD = 1e-4;
 var DEFAULT_ZOOM_REST_THRESHOLD = 1e-4;
 var MIN_ORTHOGRAPHIC_ZOOM = 1e-3;
 var MAX_ORTHOGRAPHIC_ZOOM = 1e6;
+function resolveTopViewPaddingFactor(viewportOccupancy) {
+  if (Number.isFinite(viewportOccupancy) && viewportOccupancy > 0 && viewportOccupancy <= 1) {
+    return 1 / viewportOccupancy;
+  }
+  return TOP_VIEW_PADDING_FACTOR;
+}
 function degToRad(degrees) {
   return typeof THREEProxy.MathUtils?.degToRad === "function" ? THREEProxy.MathUtils.degToRad(degrees) : Number(degrees) * Math.PI / 180;
 }
@@ -923,11 +929,12 @@ var FJDCameraControls = class extends EventDispatcher {
   }
   // 按 FJD 刚体相机模型切换到顶视图位姿。
   // 顶视图会根据相机类型自动选择距离或 zoom 的适配方式。
-  fitToTopViewBox(box, enableTransition = false) {
+  fitToTopViewBox(box, enableTransition = false, options = {}) {
     this._cancelAnimationToCurrent();
     if (!box || box.isEmpty?.()) {
       return Promise.resolve();
     }
+    const topViewPaddingFactor = resolveTopViewPaddingFactor(options?.viewportOccupancy);
     const center = box.getCenter(this._tmpPosition2);
     const camera = this._camera;
     const { right, up, back } = this._resolveTopViewBasis(
@@ -949,7 +956,7 @@ var FJDCameraControls = class extends EventDispatcher {
       const halfHorizontalFov = Math.max(horizontalFov * 0.5, Number.EPSILON);
       const distanceForHeight = halfHeight / Math.tan(halfVerticalFov);
       const distanceForWidth = halfWidth / Math.tan(halfHorizontalFov);
-      const topDistance = Math.max(distanceForHeight, distanceForWidth) * TOP_VIEW_PADDING_FACTOR;
+      const topDistance = Math.max(distanceForHeight, distanceForWidth) * topViewPaddingFactor;
       const targetDistance = projectedSize.z * 0.5 + topDistance;
       return this._setPose(
         this._tmpPosition.copy(center).add(this._tmpOffset.copy(back).multiplyScalar(targetDistance)),
@@ -962,8 +969,8 @@ var FJDCameraControls = class extends EventDispatcher {
     if (camera.isOrthographicCamera) {
       const viewWidth = Math.max(camera.right - camera.left, Number.EPSILON);
       const viewHeight = Math.max(camera.top - camera.bottom, Number.EPSILON);
-      const widthZoom = viewWidth / Math.max(projectedSize.x * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
-      const heightZoom = viewHeight / Math.max(projectedSize.y * TOP_VIEW_PADDING_FACTOR, Number.EPSILON);
+      const widthZoom = viewWidth / Math.max(projectedSize.x * topViewPaddingFactor, Number.EPSILON);
+      const heightZoom = viewHeight / Math.max(projectedSize.y * topViewPaddingFactor, Number.EPSILON);
       const targetZoom = this._sanitizeZoom(Math.min(widthZoom, heightZoom));
       const targetDistance = projectedSize.z * 0.5 + Math.max(projectedSize.z, 1);
       return this._setPose(

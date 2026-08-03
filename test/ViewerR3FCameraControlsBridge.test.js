@@ -329,4 +329,43 @@ describe("Viewer R3F camera-controls 桥接", () => {
 		expect(syncControlsContext).toHaveBeenNthCalledWith(1, viewerLike.controls, scene);
 		expect(syncControlsContext).toHaveBeenNthCalledWith(2, viewerLike.cameraControls, scene);
 	});
+
+	it("setTopView4CameraControls 应向 FJD controls 透传视口占比", () => {
+		const box = {
+			getBoundingSphere(sphere) {
+				sphere.radius = 10;
+				return sphere;
+			},
+			getCenter(target) {
+				return target.set(0, 0, 0);
+			},
+		};
+		const pointcloud = {visible: true, userData: {}};
+		const fitToTopViewBox = vi.fn();
+		const controls = {
+			usesRigidTopViewFit: true,
+			camera: {isPerspectiveCamera: true, zoom: 2},
+			fitToTopViewBox,
+			getPosition(target) {
+				return target.set(0, 0, 20);
+			},
+		};
+		const viewerLike = {
+			controls,
+			cameraControls: null,
+			scene: {
+				pointclouds: [pointcloud],
+				getBoundingBox: vi.fn(() => box),
+				view: {radius: 0},
+			},
+			getBoundingBox: vi.fn(() => box),
+		};
+		const options = {viewportOccupancy: 0.8};
+
+		Viewer.prototype.setTopView4CameraControls.call(viewerLike, true, options);
+
+		expect(fitToTopViewBox).toHaveBeenCalledWith(box, true, options);
+		expect(controls.camera.zoom).toBe(1);
+		expect(viewerLike.scene.view.radius).toBe(10);
+	});
 });
