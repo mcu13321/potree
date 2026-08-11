@@ -17,7 +17,11 @@ class MockViewer extends EventDispatcher {
 	constructor() {
 		super();
 		this.renderArea = document.createElement("div");
-		this.renderer = {domElement: document.createElement("canvas")};
+		this.renderCalls = [];
+		this.renderer = {
+			domElement: document.createElement("canvas"),
+			render: (...args) => this.renderCalls.push(args),
+		};
 		this.scene = {getActiveCamera: () => this.camera};
 		this.camera = createCamera();
 
@@ -47,13 +51,14 @@ describe("DefectMarkerTool", () => {
 		document.body.innerHTML = "";
 	});
 
-	it("creates Potree-owned HTML markers with a label above a circular pin", () => {
+	it("renders one white twelve-edge box with its label above the projected bounds", () => {
 		const viewer = new MockViewer();
 		tool = new DefectMarkerTool(viewer);
 		tool.setData([{
 			id: "A1",
 			label: "A1",
-			position: [0, 0, 0],
+			bounds: {min: [-1, -1, -1], max: [1, 1, 1]},
+			cameraPosition: [0, 0, 5],
 			color: "#2E82FF",
 			darkColor: "#7DC0FF",
 		}]);
@@ -63,18 +68,61 @@ describe("DefectMarkerTool", () => {
 		const marker = viewer.renderArea.querySelector('[data-defect-marker-id="A1"]');
 		expect(marker).not.toBeNull();
 		expect(marker.children[0].className).toBe("potree-defect-marker__label");
-		expect(marker.children[1].className).toBe("potree-defect-marker__pin");
+		expect(marker.children).toHaveLength(1);
 		expect(marker.textContent).toBe("A1");
 		expect(marker.style.getPropertyValue("--potree-defect-marker-accent")).toBe("#2E82FF");
 		expect(marker.style.getPropertyValue("--potree-defect-marker-accent-dark")).toBe("#7DC0FF");
 		expect(marker.style.left).toBe("400px");
-		expect(marker.style.top).toBe("300px");
+		expect(Number.parseInt(marker.style.top, 10)).toBeLessThan(300);
 		expect(marker.style.display).toBe("flex");
+
+		const box = tool.markers.get("A1").boxHelper;
+		expect(box).toBeInstanceOf(THREE.LineSegments);
+		expect(box.geometry.index.count / 2).toBe(12);
+		expect(box.material.color.getHex()).toBe(0xffffff);
+		expect(box.material.depthTest).toBe(false);
+		expect(box.material.depthWrite).toBe(false);
+
+		viewer.dispatchEvent({type: "render.pass.perspective_overlay"});
+		expect(viewer.renderCalls).toHaveLength(1);
 
 		const styles = document.getElementById("potree-defect-marker-styles").textContent;
 		expect(styles).toContain("border: 1px solid rgba(255, 255, 255, 0.2)");
 		expect(styles).toContain("border-color: rgba(255, 255, 255, 0.2)");
 		expect(styles).toContain("cursor: pointer");
+		expect(styles).not.toContain("potree-defect-marker__pin");
+	});
+
+	it("renders one fixed white four-edge rectangle from world-space corners", () => {
+		const viewer = new MockViewer();
+		tool = new DefectMarkerTool(viewer);
+		tool.setData([{
+			id: "A1",
+			label: "A1",
+			shape: "rectangle",
+			bounds: {min: [-1, -1, 0], max: [1, 1, 0]},
+			corners: [
+				[-1, -1, 0],
+				[1, -1, 0],
+				[1, 1, 0],
+				[-1, 1, 0],
+			],
+		}]);
+		tool.setVisible(true);
+		viewer.dispatchEvent({type: "update"});
+
+		const marker = viewer.renderArea.querySelector('[data-defect-marker-id="A1"]');
+		expect(marker.style.left).toBe("400px");
+		expect(Number.parseInt(marker.style.top, 10)).toBeLessThan(300);
+		expect(marker.style.display).toBe("flex");
+
+		const rectangle = tool.markers.get("A1").boxHelper;
+		expect(rectangle).toBeInstanceOf(THREE.LineSegments);
+		expect(rectangle.geometry.index).toBeNull();
+		expect(rectangle.geometry.attributes.position.count / 2).toBe(4);
+		expect(rectangle.material.color.getHex()).toBe(0xffffff);
+		expect(rectangle.material.depthTest).toBe(false);
+		expect(rectangle.material.depthWrite).toBe(false);
 	});
 
 	it("keeps one active marker and dispatches the same selection for label clicks", () => {
@@ -85,8 +133,8 @@ describe("DefectMarkerTool", () => {
 		});
 		tool = new DefectMarkerTool(viewer);
 		tool.setData([
-			{id: "A1", label: "A1", position: [0, 0, 0]},
-			{id: "A2", label: "A2", position: [1, 0, 0]},
+			{id: "A1", label: "A1", bounds: {min: [-1, -1, -1], max: [1, 1, 1]}},
+			{id: "A2", label: "A2", bounds: {min: [1, -1, -1], max: [2, 1, 1]}},
 		]);
 
 		tool.setActiveMarker("A1");
@@ -101,10 +149,6 @@ describe("DefectMarkerTool", () => {
 
 		const styles = document.getElementById("potree-defect-marker-styles").textContent;
 		expect(styles).toContain(".potree-defect-marker--active");
-		expect(styles).toContain("0 0 0 6px rgba(255, 255, 255, 0.18)");
-		expect(styles).toContain("0 0 0 11px rgba(255, 255, 255, 0.09)");
-		expect(styles).not.toContain(".potree-defect-marker__pin::before");
-		expect(styles).not.toContain(".potree-defect-marker__pin::after");
 		expect(styles).toContain(".potree-defect-marker__label::after");
 		expect(styles).toContain("background: rgba(0, 0, 0, 0.2)");
 		expect(styles).toContain(".potree-defect-marker--active .potree-defect-marker__label::after");
@@ -117,7 +161,12 @@ describe("DefectMarkerTool", () => {
 			fitToSphere: (sphere, animate) => focusCalls.push({sphere, animate}),
 		};
 		tool = new DefectMarkerTool(viewer);
-		tool.setData([{id: "A1", label: "A1", position: [1, 2, 3]}]);
+		tool.setData([{
+			id: "A1",
+			label: "A1",
+			bounds: {min: [0, 1, 2], max: [2, 3, 4]},
+			cameraPosition: [1, 2, 3],
+		}]);
 
 		tool.focusMarker("A1");
 
@@ -131,8 +180,8 @@ describe("DefectMarkerTool", () => {
 		const viewer = new MockViewer();
 		tool = new DefectMarkerTool(viewer);
 		tool.setData([
-			{id: "A1", label: "First", position: [0, 0, 0]},
-			{id: "invalid", label: "Invalid", position: [0, Number.NaN, 0]},
+			{id: "A1", label: "First", bounds: {min: [-1, -1, -1], max: [1, 1, 1]}},
+			{id: "invalid", label: "Invalid", bounds: {min: [0, Number.NaN, 0], max: [1, 1, 1]}},
 		]);
 
 		const originalElement = tool.markers.get("A1").element;
@@ -141,7 +190,7 @@ describe("DefectMarkerTool", () => {
 		tool.setData([{
 			id: "A1",
 			label: "Updated",
-			position: [1, 0, 0],
+			bounds: {min: [0, -1, -1], max: [2, 1, 1]},
 			color: "#BE123C",
 			darkColor: "#F1B1B1",
 		}]);
@@ -150,7 +199,7 @@ describe("DefectMarkerTool", () => {
 		expect(originalElement.style.getPropertyValue("--potree-defect-marker-accent")).toBe("#BE123C");
 		expect(originalElement.style.getPropertyValue("--potree-defect-marker-accent-dark")).toBe("#F1B1B1");
 
-		tool.setData([{id: "A2", label: "Second", position: [0, 0, 0]}]);
+		tool.setData([{id: "A2", label: "Second", bounds: {min: [-1, -1, -1], max: [1, 1, 1]}}]);
 		expect(tool.markers.has("A1")).toBe(false);
 		expect(tool.markers.has("A2")).toBe(true);
 	});
@@ -158,7 +207,11 @@ describe("DefectMarkerTool", () => {
 	it("hides markers behind the camera and clears all owned DOM", () => {
 		const viewer = new MockViewer();
 		tool = new DefectMarkerTool(viewer);
-		tool.setData([{id: "A1", label: "Behind", position: [0, 0, 20]}]);
+		tool.setData([{
+			id: "A1",
+			label: "Behind",
+			bounds: {min: [-1, -1, 19], max: [1, 1, 21]},
+		}]);
 		tool.setVisible(true);
 		viewer.dispatchEvent({type: "update"});
 

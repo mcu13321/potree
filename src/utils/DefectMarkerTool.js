@@ -2,9 +2,22 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 import {EventDispatcher} from "../EventDispatcher.js";
 
 const DEFECT_MARKER_STYLE_ID = "potree-defect-marker-styles";
+const DEFECT_BOX_COLOR = 0xffffff;
+const DEFECT_BOX_RENDER_ORDER = 10000;
+const DEFECT_LABEL_GAP_PX = 4;
 const _worldPosition = new THREE.Vector3();
 const _viewPosition = new THREE.Vector3();
 const _screenPosition = new THREE.Vector3();
+const BOX_CORNER_FACTORS = [
+	[0, 0, 0],
+	[0, 0, 1],
+	[0, 1, 0],
+	[0, 1, 1],
+	[1, 0, 0],
+	[1, 0, 1],
+	[1, 1, 0],
+	[1, 1, 1],
+];
 const styleStateByDocument = new WeakMap();
 
 const DEFECT_MARKER_STYLES = `
@@ -20,17 +33,14 @@ const DEFECT_MARKER_STYLES = `
 	--potree-defect-marker-accent: #8576ff;
 	--potree-defect-marker-accent-dark: #a99fff;
 	--potree-defect-marker-accent-current: var(--potree-defect-marker-accent);
-	--potree-defect-marker-accent-line: color-mix(in srgb, var(--potree-defect-marker-accent-current) 48%, transparent);
 	--potree-defect-marker-accent-soft: color-mix(in srgb, var(--potree-defect-marker-accent-current) 18%, transparent);
 	position: absolute;
 	left: 0;
 	top: 0;
 	display: none;
-	flex-direction: column;
 	align-items: center;
-	gap: 4px;
 	max-width: 320px;
-	transform: translate(-50%, calc(-100% + 9px));
+	transform: translate(-50%, calc(-100% - 4px));
 	white-space: nowrap;
 	cursor: pointer;
 	pointer-events: auto;
@@ -38,8 +48,7 @@ const DEFECT_MARKER_STYLES = `
 }
 
 .potree-defect-marker__label,
-.potree-defect-marker__label-text,
-.potree-defect-marker__pin {
+.potree-defect-marker__label-text {
 	cursor: pointer;
 }
 
@@ -89,27 +98,6 @@ const DEFECT_MARKER_STYLES = `
 	white-space: nowrap;
 }
 
-.potree-defect-marker__pin {
-	box-sizing: border-box;
-	display: block;
-	width: 18px;
-	height: 18px;
-	flex: 0 0 auto;
-	border: 2px solid rgba(255, 255, 255, 0.9);
-	border-radius: 50%;
-	background: var(--potree-defect-marker-accent-current);
-	box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--potree-defect-marker-accent-line);
-	transition: box-shadow 160ms ease;
-}
-
-.potree-defect-marker--active .potree-defect-marker__pin {
-	/* Render two filled halo bands instead of circular outline strokes. */
-	box-shadow:
-		0 0 0 6px rgba(255, 255, 255, 0.18),
-		0 0 0 11px rgba(255, 255, 255, 0.09),
-		0 8px 18px rgba(0, 0, 0, 0.18);
-}
-
 html.dark .potree-defect-marker,
 html[data-theme="dark"] .potree-defect-marker {
 	--potree-defect-marker-accent-current: var(--potree-defect-marker-accent-dark);
@@ -156,8 +144,25 @@ function releaseDefectMarkerStyles(documentRef) {
 }
 
 function normalizeMarker(marker, index) {
-	const position = Array.isArray(marker?.position) ? marker.position.slice(0, 3).map(Number) : [];
-	if (position.length !== 3 || !position.every(Number.isFinite)) {
+	const min = Array.isArray(marker?.bounds?.min) ? marker.bounds.min.slice(0, 3).map(Number) : [];
+	const max = Array.isArray(marker?.bounds?.max) ? marker.bounds.max.slice(0, 3).map(Number) : [];
+	const hasValidBounds =
+		min.length === 3 &&
+		max.length === 3 &&
+		min.every(Number.isFinite) &&
+		max.every(Number.isFinite) &&
+		min.every((value, axis) => value <= max[axis]);
+	if (!hasValidBounds) {
+		return null;
+	}
+	const shape = marker?.shape === "rectangle" ? "rectangle" : "box";
+	const corners = Array.isArray(marker?.corners)
+		? marker.corners.map((corner) => Array.isArray(corner) ? corner.slice(0, 3).map(Number) : [])
+		: [];
+	const hasValidRectangle =
+		corners.length === 4 &&
+		corners.every((corner) => corner.length === 3 && corner.every(Number.isFinite));
+	if (shape === "rectangle" && !hasValidRectangle) {
 		return null;
 	}
 
@@ -170,8 +175,21 @@ function normalizeMarker(marker, index) {
 	// Accept CSS colors from the host payload while keeping stable Potree defaults.
 	const color = String(marker?.color ?? "").trim() || "#8576ff";
 	const darkColor = String(marker?.darkColor ?? "").trim() || color;
+	const cameraPosition = Array.isArray(marker?.cameraPosition)
+		? marker.cameraPosition.slice(0, 3).map(Number)
+		: [];
+	const hasCameraPosition = cameraPosition.length === 3 && cameraPosition.every(Number.isFinite);
 
-	return {id, label, position, color, darkColor};
+	return {
+		id,
+		label,
+		shape,
+		bounds: {min, max},
+		...(shape === "rectangle" ? {corners} : {}),
+		...(hasCameraPosition ? {cameraPosition} : {}),
+		color,
+		darkColor,
+	};
 }
 
 export class DefectMarkerTool extends EventDispatcher {
@@ -182,6 +200,11 @@ export class DefectMarkerTool extends EventDispatcher {
 		this.visible = false;
 		this.activeMarkerId = null;
 		this.markers = new Map();
+		this.scene = new THREE.Scene();
+		this.scene.name = "scene_defect_markers";
+		this.boxGroup = new THREE.Group();
+		this.boxGroup.name = "potree_defect_marker_boxes";
+		this.scene.add(this.boxGroup);
 		this.hostElement = this._resolveHostElement();
 		this.document = this.hostElement?.ownerDocument ?? document;
 		this.rootElement = this.document.createElement("div");
@@ -192,7 +215,9 @@ export class DefectMarkerTool extends EventDispatcher {
 		this.releaseStyles = acquireDefectMarkerStyles(this.document);
 
 		this._onUpdate = () => this.update();
+		this._onRender = () => this.render();
 		viewer.addEventListener("update", this._onUpdate);
+		viewer.addEventListener("render.pass.perspective_overlay", this._onRender);
 	}
 
 	_resolveHostElement() {
@@ -231,23 +256,81 @@ export class DefectMarkerTool extends EventDispatcher {
 		labelTextElement.textContent = marker.label;
 		labelElement.appendChild(labelTextElement);
 
-		const pinElement = this.document.createElement("span");
-		pinElement.className = "potree-defect-marker__pin";
-		pinElement.setAttribute("aria-hidden", "true");
-
-		element.append(labelElement, pinElement);
+		element.append(labelElement);
 		this.rootElement.appendChild(element);
+		const boxHelper = this._createBoxHelper(marker);
 
-		return {element, labelTextElement, marker};
+		return {element, labelTextElement, boxHelper, marker};
+	}
+
+	_createBoxHelper(marker) {
+		if (marker.shape === "rectangle") {
+			return this._createRectangleHelper(marker);
+		}
+
+		const box = new THREE.Box3(
+			new THREE.Vector3().fromArray(marker.bounds.min),
+			new THREE.Vector3().fromArray(marker.bounds.max),
+		);
+		const helper = new THREE.Box3Helper(box, DEFECT_BOX_COLOR);
+		helper.name = `potree_defect_marker_box_${marker.id}`;
+		helper.material.depthTest = false;
+		helper.material.depthWrite = false;
+		helper.renderOrder = DEFECT_BOX_RENDER_ORDER;
+		helper.userData.defectMarkerId = marker.id;
+		this.boxGroup.add(helper);
+		return helper;
+	}
+
+	_createRectangleHelper(marker) {
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute(
+			"position",
+			new THREE.Float32BufferAttribute(this._buildRectangleLinePositions(marker.corners), 3),
+		);
+		const material = new THREE.LineBasicMaterial({color: DEFECT_BOX_COLOR});
+		material.depthTest = false;
+		material.depthWrite = false;
+		const helper = new THREE.LineSegments(geometry, material);
+		helper.name = `potree_defect_marker_rectangle_${marker.id}`;
+		helper.renderOrder = DEFECT_BOX_RENDER_ORDER;
+		helper.userData.defectMarkerId = marker.id;
+		this.boxGroup.add(helper);
+		return helper;
+	}
+
+	_buildRectangleLinePositions(corners) {
+		const positions = [];
+		for (let index = 0; index < corners.length; index += 1) {
+			positions.push(...corners[index], ...corners[(index + 1) % corners.length]);
+		}
+		return positions;
 	}
 
 	_updateMarkerElement(entry, marker) {
+		const previousShape = entry.marker.shape;
 		entry.marker = marker;
 		if (entry.labelTextElement.textContent !== marker.label) {
 			entry.labelTextElement.textContent = marker.label;
 		}
 		entry.element.style.setProperty("--potree-defect-marker-accent", marker.color);
 		entry.element.style.setProperty("--potree-defect-marker-accent-dark", marker.darkColor);
+		if (previousShape !== marker.shape) {
+			this.boxGroup.remove(entry.boxHelper);
+			entry.boxHelper.geometry?.dispose?.();
+			entry.boxHelper.material?.dispose?.();
+			entry.boxHelper = this._createBoxHelper(marker);
+		} else if (marker.shape === "rectangle") {
+			entry.boxHelper.geometry.attributes.position.array.set(
+				this._buildRectangleLinePositions(marker.corners),
+			);
+			entry.boxHelper.geometry.attributes.position.needsUpdate = true;
+			entry.boxHelper.geometry.computeBoundingSphere();
+		} else {
+			entry.boxHelper.box.min.fromArray(marker.bounds.min);
+			entry.boxHelper.box.max.fromArray(marker.bounds.max);
+			entry.boxHelper.updateMatrixWorld(true);
+		}
 	}
 
 	_removeMarker(id) {
@@ -256,6 +339,9 @@ export class DefectMarkerTool extends EventDispatcher {
 			return;
 		}
 
+		this.boxGroup.remove(entry.boxHelper);
+		entry.boxHelper.geometry?.dispose?.();
+		entry.boxHelper.material?.dispose?.();
 		entry.element.remove();
 		this.markers.delete(id);
 		if (this.activeMarkerId === id) {
@@ -304,7 +390,11 @@ export class DefectMarkerTool extends EventDispatcher {
 			return;
 		}
 
-		const center = new THREE.Vector3().fromArray(marker.position);
+		if (!marker.cameraPosition) {
+			return;
+		}
+
+		const center = new THREE.Vector3().fromArray(marker.cameraPosition);
 		const sphere = new THREE.Sphere(center, 2);
 		// Match the existing label focus behavior while preferring the live FJD controls.
 		const controls =
@@ -317,6 +407,7 @@ export class DefectMarkerTool extends EventDispatcher {
 
 	setVisible(visible) {
 		this.visible = Boolean(visible);
+		this.boxGroup.visible = this.visible;
 		this.update();
 	}
 
@@ -331,6 +422,81 @@ export class DefectMarkerTool extends EventDispatcher {
 		entry.element.style.display = visible ? "flex" : "none";
 	}
 
+	_projectMarkerBounds(marker, camera, canvasRect, hostRect) {
+		const [minX, minY, minZ] = marker.bounds.min;
+		const [maxX, maxY, maxZ] = marker.bounds.max;
+		let projectedMinX = Number.POSITIVE_INFINITY;
+		let projectedMinY = Number.POSITIVE_INFINITY;
+		let projectedMaxX = Number.NEGATIVE_INFINITY;
+		let projectedMaxY = Number.NEGATIVE_INFINITY;
+		let projectedCount = 0;
+
+		const projectionPoints = marker.shape === "rectangle" ? marker.corners : BOX_CORNER_FACTORS;
+		for (const point of projectionPoints) {
+			if (marker.shape === "rectangle") {
+				_worldPosition.fromArray(point);
+			} else {
+				const [xFactor, yFactor, zFactor] = point;
+				_worldPosition.set(
+					xFactor ? maxX : minX,
+					yFactor ? maxY : minY,
+					zFactor ? maxZ : minZ,
+				);
+			}
+			_viewPosition.copy(_worldPosition).applyMatrix4(camera.matrixWorldInverse);
+			if (_viewPosition.z > 0) {
+				continue;
+			}
+
+			_screenPosition.copy(_worldPosition).project(camera);
+			if (
+				!Number.isFinite(_screenPosition.x) ||
+				!Number.isFinite(_screenPosition.y) ||
+				!Number.isFinite(_screenPosition.z) ||
+				_screenPosition.z < -1 ||
+				_screenPosition.z > 1
+			) {
+				continue;
+			}
+
+			const x =
+				canvasRect.left -
+				hostRect.left +
+				((_screenPosition.x + 1) * canvasRect.width) / 2;
+			const y =
+				canvasRect.top -
+				hostRect.top +
+				((-_screenPosition.y + 1) * canvasRect.height) / 2;
+			projectedMinX = Math.min(projectedMinX, x);
+			projectedMinY = Math.min(projectedMinY, y);
+			projectedMaxX = Math.max(projectedMaxX, x);
+			projectedMaxY = Math.max(projectedMaxY, y);
+			projectedCount += 1;
+		}
+
+		if (!projectedCount) {
+			return null;
+		}
+
+		const canvasLeft = canvasRect.left - hostRect.left;
+		const canvasTop = canvasRect.top - hostRect.top;
+		const canvasRight = canvasLeft + canvasRect.width;
+		const canvasBottom = canvasTop + canvasRect.height;
+		const intersectsCanvas =
+			projectedMaxX >= canvasLeft &&
+			projectedMinX <= canvasRight &&
+			projectedMaxY >= canvasTop &&
+			projectedMinY <= canvasBottom;
+		if (!intersectsCanvas) {
+			return null;
+		}
+
+		return {
+			x: (projectedMinX + projectedMaxX) / 2,
+			y: projectedMinY - DEFECT_LABEL_GAP_PX,
+		};
+	}
+
 	update() {
 		if (!this.rootElement) {
 			return;
@@ -338,6 +504,7 @@ export class DefectMarkerTool extends EventDispatcher {
 
 		const shouldRender = this.visible && this.markers.size > 0;
 		this.rootElement.style.display = shouldRender ? "block" : "none";
+		this.boxGroup.visible = shouldRender;
 		if (!shouldRender) {
 			return;
 		}
@@ -350,49 +517,53 @@ export class DefectMarkerTool extends EventDispatcher {
 
 		const canvasRect = canvas.getBoundingClientRect();
 		const hostRect = this.hostElement?.getBoundingClientRect?.() ?? {left: 0, top: 0};
-		const width = canvasRect.width || canvas.clientWidth;
-		const height = canvasRect.height || canvas.clientHeight;
-		if (!width || !height) {
+		const projectionRect = {
+			left: canvasRect.left,
+			top: canvasRect.top,
+			width: canvasRect.width || canvas.clientWidth,
+			height: canvasRect.height || canvas.clientHeight,
+		};
+		if (!projectionRect.width || !projectionRect.height) {
 			return;
 		}
 
 		for (const entry of this.markers.values()) {
-			_worldPosition.fromArray(entry.marker.position);
-			_viewPosition.copy(_worldPosition).applyMatrix4(camera.matrixWorldInverse);
-			_screenPosition.copy(_worldPosition).project(camera);
-
-			const inView =
-				_viewPosition.z <= 0 &&
-				Number.isFinite(_screenPosition.x) &&
-				Number.isFinite(_screenPosition.y) &&
-				Number.isFinite(_screenPosition.z) &&
-				_screenPosition.x >= -1 &&
-				_screenPosition.x <= 1 &&
-				_screenPosition.y >= -1 &&
-				_screenPosition.y <= 1 &&
-				_screenPosition.z >= -1 &&
-				_screenPosition.z <= 1;
-
-			if (!inView) {
+			const projectedBounds = this._projectMarkerBounds(
+				entry.marker,
+				camera,
+				projectionRect,
+				hostRect,
+			);
+			if (!projectedBounds) {
 				this._setMarkerVisible(entry, false);
 				continue;
 			}
 
-			const x = canvasRect.left - hostRect.left + ((_screenPosition.x + 1) * width) / 2;
-			const y = canvasRect.top - hostRect.top + ((-_screenPosition.y + 1) * height) / 2;
-			entry.element.style.left = `${Math.round(x)}px`;
-			entry.element.style.top = `${Math.round(y)}px`;
+			entry.element.style.left = `${Math.round(projectedBounds.x)}px`;
+			entry.element.style.top = `${Math.round(projectedBounds.y)}px`;
 			this._setMarkerVisible(entry, true);
 		}
 	}
 
+	render() {
+		if (!this.visible || !this.markers.size) {
+			return;
+		}
+
+		this.viewer.renderer.render(this.scene, this.viewer.scene.getActiveCamera());
+	}
+
 	dispose() {
 		this.viewer?.removeEventListener("update", this._onUpdate);
+		this.viewer?.removeEventListener("render.pass.perspective_overlay", this._onRender);
 		this.clear();
+		this.scene?.remove(this.boxGroup);
 		this.rootElement?.remove();
 		this.releaseStyles?.();
 		this.rootElement = null;
 		this.hostElement = null;
+		this.boxGroup = null;
+		this.scene = null;
 		this.viewer = null;
 	}
 }
