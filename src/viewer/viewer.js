@@ -4,6 +4,12 @@ import {Renderer} from "../PotreeRenderer.js";
 import {PotreeRenderer} from "./PotreeRenderer.js";
 import {EDLRenderer} from "./EDLRenderer.js";
 import {HQSplatRenderer} from "./HQSplatRenderer.js";
+import {isXraySplatPipelineSupported} from "./XraySplatPipeline.js";
+import {
+	areXrayRenderSettingsEqual,
+	DEFAULT_XRAY_RENDER_SETTINGS,
+	normalizeXrayRenderSettings,
+} from "./XrayRenderSettings.js";
 import {Scene} from "./Scene.js";
 import {ClippingTool} from "../utils/ClippingTool.js";
 import {TransformationTool} from "../utils/TransformationTool.js";
@@ -160,6 +166,9 @@ export class Viewer extends EventDispatcher{
 		this.edlStrength = 1.0;
 		this.edlRadius = 1.4;
 		this.edlOpacity = 1.0;
+		this._xrayRenderSettings = Object.freeze({...DEFAULT_XRAY_RENDER_SETTINGS});
+		this._xraySplatPipelineSupported = null;
+		this._didWarnXrayPipelineFallback = false;
 		// 记录批量接口的默认效果，供后续新加载点云继承。
 		this._pointcloudEffectDefaults = {
 			edlEnabled: false,
@@ -189,6 +198,7 @@ export class Viewer extends EventDispatcher{
 
 		this.potreeRenderer = null;
 		this.edlRenderer = null;
+		this.hqRenderer = null;
 		this.renderer = null;
 		this.pRenderer = null;
 
@@ -844,6 +854,84 @@ export class Viewer extends EventDispatcher{
 
 	hasVisibleEDLEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
 		return hasVisibleEDLEffect(pointclouds, this.isEDLSupported());
+	};
+
+	/** Return whether any visible point cloud needs the offscreen X-ray renderer. */
+	hasVisibleXRAYEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
+		return pointclouds.some((pointcloud) => {
+			return pointcloud?.visible !== false
+				&& getPointcloudEffectState(pointcloud, this.isEDLSupported()).xrayEnabled;
+		});
+	};
+
+	/** Return a copy of the global X-ray resolve configuration. */
+	getXrayRenderSettings () {
+		return {...this._xrayRenderSettings};
+	};
+
+	/** Apply and publish a normalized partial X-ray resolve configuration. */
+	setXrayRenderSettings (settings) {
+		const nextSettings = normalizeXrayRenderSettings(settings, this._xrayRenderSettings);
+		if (areXrayRenderSettingsEqual(nextSettings, this._xrayRenderSettings)) {
+			return this.getXrayRenderSettings();
+		}
+
+		this._xrayRenderSettings = Object.freeze(nextSettings);
+		this.dispatchEvent({
+			type: 'xray_render_settings_changed',
+			viewer: this,
+			settings: this.getXrayRenderSettings(),
+		});
+		return this.getXrayRenderSettings();
+	};
+
+	get xrayRenderSettings () {
+		return this.getXrayRenderSettings();
+	};
+
+	set xrayRenderSettings (settings) {
+		this.setXrayRenderSettings(settings);
+	};
+
+	get xrayDensityScale () {
+		return this._xrayRenderSettings.densityScale;
+	};
+
+	set xrayDensityScale (value) {
+		this.setXrayRenderSettings({densityScale: value});
+	};
+
+	get xrayMaxOpacity () {
+		return this._xrayRenderSettings.maxOpacity;
+	};
+
+	set xrayMaxOpacity (value) {
+		this.setXrayRenderSettings({maxOpacity: value});
+	};
+
+	get xrayFrontDetailStrength () {
+		return this._xrayRenderSettings.frontDetailStrength;
+	};
+
+	set xrayFrontDetailStrength (value) {
+		this.setXrayRenderSettings({frontDetailStrength: value});
+	};
+
+	get xrayColorGamma () {
+		return this._xrayRenderSettings.colorGamma;
+	};
+
+	set xrayColorGamma (value) {
+		this.setXrayRenderSettings({colorGamma: value});
+	};
+
+	/** Return whether the active WebGL renderer supports the offscreen X-ray pipeline. */
+	isXraySplatPipelineSupported () {
+		if(this._xraySplatPipelineSupported === null){
+			this._xraySplatPipelineSupported = isXraySplatPipelineSupported(this.renderer);
+		}
+
+		return this._xraySplatPipelineSupported;
 	};
 
 	setEDLEnabled (value) {
@@ -2427,8 +2515,17 @@ export class Viewer extends EventDispatcher{
 
 	getPRenderer(){
 		const hasVisibleEDL = this.hasVisibleEDLEffectPointclouds();
+		const hasVisibleXRAY = this.hasVisibleXRAYEffectPointclouds();
+		const supportsXrayPipeline = !hasVisibleXRAY || this.isXraySplatPipelineSupported();
 
-		if(this.useHQ){
+		if(hasVisibleXRAY && !supportsXrayPipeline && !this._didWarnXrayPipelineFallback){
+			// Preserve functionality on legacy GPUs even though direct blending can be brighter.
+			console.warn("Offscreen X-ray rendering is unavailable; falling back to direct rendering.");
+			this._didWarnXrayPipelineFallback = true;
+		}
+
+		// X-ray always uses the HQ render-target pipeline to avoid direct additive canvas blending.
+		if((this.useHQ || hasVisibleXRAY) && supportsXrayPipeline){
 			if (!this.hqRenderer) {
 				this.hqRenderer = new HQSplatRenderer(this);
 			}

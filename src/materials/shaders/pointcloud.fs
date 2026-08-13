@@ -93,18 +93,38 @@ void main() {
 		#endif
 	#endif
 
-	#if defined(weighted_splats)
+	#if defined(xray_front_pass)
+		float distance = 2.0 * length(gl_PointCoord.xy - 0.5);
+		float frontCoverage = pow(max(0.0, 1.0 - distance), 1.5);
+
+		// Store premultiplied front color so the resolve pass can fade circular splat edges.
+		gl_FragColor = vec4(color * frontCoverage, frontCoverage);
+	#elif defined(weighted_splats) && defined(use_xray)
+		float distance = 2.0 * length(gl_PointCoord.xy - 0.5);
+		float weight = max(0.0, 1.0 - distance);
+		weight = pow(weight, 1.5);
+
+		// Store premultiplied color and total contribution for the X-ray resolve pass.
+		float xrayAlpha = uXrayMultiOpacity;
+		if (uXrayUseDistanceRamp == 1) {
+			// Guard degenerate bounds to keep the distance ramp finite.
+			float distanceRange = max(uFar - uNear, 0.000001);
+			xrayAlpha = clamp((vDistance - uNear) / distanceRange, 0.0, 0.1);
+		}
+		float contribution = weight * xrayAlpha;
+		gl_FragColor = vec4(color * contribution, contribution);
+	#elif defined(weighted_splats)
 		float distance = 2.0 * length(gl_PointCoord.xy - 0.5);
 		float weight = max(0.0, 1.0 - distance);
 		weight = pow(weight, 1.5);
 
 		gl_FragColor.a = weight;
 		gl_FragColor.xyz = gl_FragColor.xyz * weight;
-	#endif
-
-	#if defined(use_xray)
+	#elif defined(use_xray)
 		if (uXrayUseDistanceRamp == 1) {
-			gl_FragColor.a = clamp((vDistance - uNear) / (uFar - uNear), 0.0, 0.1);
+			// Guard degenerate bounds to keep the distance ramp finite.
+			float distanceRange = max(uFar - uNear, 0.000001);
+			gl_FragColor.a = clamp((vDistance - uNear) / distanceRange, 0.0, 0.1);
 		} else {
 			// 多点云 XRAY 透明度由 CPU 端按距离和层级计算后传入。
 			gl_FragColor.a = uXrayMultiOpacity;

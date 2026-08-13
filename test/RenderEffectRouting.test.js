@@ -118,39 +118,6 @@ function createViewerForEffectRender(pointclouds, sourceKind = "single") {
 	};
 }
 
-function createHQEffectMaterialStub() {
-	return {
-		uniforms: {
-			uNear: { value: 0 },
-			uFar: { value: 0 },
-			uXrayUseDistanceRamp: { value: 1 },
-			uXrayMultiOpacity: { value: 0.01 },
-			cameraPosition: { value: null },
-		},
-		get uXrayUseDistanceRamp() {
-			return this.uniforms.uXrayUseDistanceRamp.value;
-		},
-		set uXrayUseDistanceRamp(value) {
-			this.uniforms.uXrayUseDistanceRamp.value = value;
-		},
-		get uXrayMultiOpacity() {
-			return this.uniforms.uXrayMultiOpacity.value;
-		},
-		set uXrayMultiOpacity(value) {
-			this.uniforms.uXrayMultiOpacity.value = value;
-		},
-		set uNear(value) {
-			this.uniforms.uNear.value = value;
-		},
-		set uFar(value) {
-			this.uniforms.uFar.value = value;
-		},
-		set cameraPosition(value) {
-			this.uniforms.cameraPosition.value = value;
-		},
-	};
-}
-
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -218,10 +185,17 @@ describe("Render effect routing", () => {
 		expect(renderer._renderEDLPointclouds).toHaveBeenCalledWith([pc1], expect.anything(), 800, 600, []);
 	});
 
-	it("HQ 渲染器应分别为普通组和 EDL 组执行独立 pass", () => {
+	it("HQ 渲染器应编排普通、XRAY 和 EDL 独立 pass", () => {
 		const pc1 = createPointcloud("pc1", { edlEnabled: true });
 		const pc2 = createPointcloud("pc2");
-		const viewer = createViewerForEffectRender([pc1, pc2], "group");
+		const pc3 = createPointcloud("pc3", { xrayEnabled: true });
+		const viewer = createViewerForEffectRender([pc1, pc2, pc3], "group");
+		viewer.getXrayRenderSettings = vi.fn(() => ({
+			densityScale: 2,
+			maxOpacity: 0.85,
+			frontDetailStrength: 0.35,
+			colorGamma: 0.55,
+		}));
 		const renderer = new HQSplatRenderer(viewer);
 
 		renderer.init = vi.fn(() => {
@@ -251,13 +225,22 @@ describe("Render effect routing", () => {
 		renderer._renderPointcloudGroup = vi.fn();
 		renderer._renderBackground = vi.fn();
 		renderer._renderNormalizationPass = vi.fn();
-		renderer._prepareEffectMaterials = vi.fn();
+		renderer._preparePassMaterials = vi.fn((pointcloud, originals) => {
+			originals.set(pointcloud, pointcloud.material);
+		});
+		renderer.xrayPipeline = {
+			prune: vi.fn(),
+			renderToTargets: vi.fn(),
+			resolve: vi.fn(),
+		};
 
 		renderer.render({ camera: createCamera() });
 
 		expect(renderer._renderPointcloudGroup).toHaveBeenCalledTimes(2);
 		expect(renderer._renderPointcloudGroup.mock.calls[0][0].pointclouds).toEqual([pc2]);
 		expect(renderer._renderPointcloudGroup.mock.calls[1][0].pointclouds).toEqual([pc1]);
+		expect(renderer.xrayPipeline.renderToTargets.mock.calls[0][0].pointclouds).toEqual([pc3]);
+		expect(renderer.xrayPipeline.resolve).toHaveBeenCalledWith(viewer.getXrayRenderSettings());
 		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(2);
 		expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
 		expect(renderer._renderNormalizationPass.mock.calls[1][0].useEDL).toBe(true);
@@ -299,43 +282,68 @@ describe("Render effect routing", () => {
 		expect(pc1.material.uXrayUseDistanceRamp).toBe(1);
 	});
 
-	it("HQ XRAY 材质准备阶段应同步动态透明度到双 pass 材质", () => {
-		const pc = createPointcloud("pc", {
-			xrayEnabled: true,
-			xrayTopViewBaseDistance: Math.sqrt(75),
-		});
-		pc.maxLevel = 2;
-		pc.pointCount = 30;
-		pc.material = {
-			opacity: 1,
-			size: 1,
-			minSize: 2,
-			maxSize: 50,
-			pointSizeType: 0,
-			visibleNodesTexture: {},
-			classification: {},
-			uniforms: {
-				classificationLUT: { value: { image: { data: new Uint8Array(4) } } },
-				uFilterReturnNumberRange: { value: [0, 7] },
-				uFilterNumberOfReturnsRange: { value: [0, 7] },
-				uFilterGPSTimeClipRange: { value: [0, 7] },
-				uFilterPointSourceIDClipRange: { value: [0, 65535] },
-			},
-			clipTask: 0,
-			clipMethod: 0,
-			clipBoxes: [],
-			clipPolygons: [],
-		};
-		const viewer = createViewerForEffectRender([pc, createPointcloud("pc2")], "group");
+	it("restores original materials when an HQ pass fails", () => {
+		const pointcloud = createPointcloud("pc");
+		const originalMaterial = {name: "original"};
+		pointcloud.material = originalMaterial;
+		const viewer = createViewerForEffectRender([pointcloud]);
 		const renderer = new HQSplatRenderer(viewer);
-		const originalMaterials = new Map();
-		renderer.attributeMaterials.set(pc, createHQEffectMaterialStub());
-		renderer.depthMaterials.set(pc, createHQEffectMaterialStub());
+		renderer.init = vi.fn(() => {
+			renderer.initialized = true;
+		});
+		renderer._ensureStandardTargets = vi.fn(() => {
+			renderer.rtDepth = {width: 800, height: 600};
+			renderer.rtAttribute = {width: 800, height: 600};
+		});
+		renderer.clearTargets = vi.fn();
+		renderer._preparePassMaterials = vi.fn((pc, originals) => {
+			originals.set(pc, pc.material);
+			pc.material = {name: "derived"};
+		});
+		renderer._renderPointcloudGroup = vi.fn(() => {
+			throw new Error("HQ pass failed");
+		});
+		renderer.xrayPipeline = {
+			prune: vi.fn(),
+			renderToTargets: vi.fn(),
+		};
 
-		renderer._prepareEffectMaterials(pc, createCamera(), true, originalMaterials);
-
-		expect(renderer.attributeMaterials.get(pc).uXrayUseDistanceRamp).toBe(0);
-		expect(renderer.attributeMaterials.get(pc).uXrayMultiOpacity).toBeCloseTo(0.0245);
-		expect(renderer.depthMaterials.get(pc).uXrayMultiOpacity).toBeCloseTo(0.0245);
+		expect(() => renderer.render({camera: createCamera()})).toThrow("HQ pass failed");
+		expect(pointcloud.material).toBe(originalMaterial);
 	});
+
+	it("prunes stale HQ materials and disposes renderer-owned resources", () => {
+		const retained = createPointcloud("retained");
+		const removed = createPointcloud("removed");
+		const viewer = createViewerForEffectRender([retained]);
+		const renderer = new HQSplatRenderer(viewer);
+		const retainedDepth = {dispose: vi.fn()};
+		const removedDepth = {dispose: vi.fn()};
+		const retainedAttribute = {dispose: vi.fn()};
+		const removedAttribute = {dispose: vi.fn()};
+		renderer.depthMaterials.set(retained, retainedDepth);
+		renderer.depthMaterials.set(removed, removedDepth);
+		renderer.attributeMaterials.set(retained, retainedAttribute);
+		renderer.attributeMaterials.set(removed, removedAttribute);
+		renderer.xrayPipeline = {prune: vi.fn(), dispose: vi.fn()};
+
+		renderer._pruneMaterialCaches([retained]);
+
+		expect(removedDepth.dispose).toHaveBeenCalledTimes(1);
+		expect(removedAttribute.dispose).toHaveBeenCalledTimes(1);
+		expect(renderer.xrayPipeline.prune).toHaveBeenCalledWith(new Set([retained]));
+
+		const sharedDepthTexture = {};
+		renderer.rtDepth = {depthTexture: sharedDepthTexture, dispose: vi.fn()};
+		renderer.rtAttribute = {depthTexture: sharedDepthTexture, dispose: vi.fn()};
+		renderer.normalizationMaterial = {dispose: vi.fn()};
+		renderer.normalizationEDLMaterial = {dispose: vi.fn()};
+		renderer.dispose();
+
+		expect(retainedDepth.dispose).toHaveBeenCalledTimes(1);
+		expect(retainedAttribute.dispose).toHaveBeenCalledTimes(1);
+		expect(renderer.rtDepth).toBeNull();
+		expect(renderer.xrayPipeline.dispose).toHaveBeenCalledTimes(1);
+	});
+
 });

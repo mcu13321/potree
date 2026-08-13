@@ -2,32 +2,35 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 import {NormalizationMaterial} from "../materials/NormalizationMaterial.js";
 import {NormalizationEDLMaterial} from "../materials/NormalizationEDLMaterial.js";
 import {PointCloudMaterial} from "../materials/PointCloudMaterial.js";
-import {PointShape} from "../defines.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
-import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {getPointcloudEffectState, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {
+	disposePointcloudMaterialMap,
+	prunePointcloudMaterialMap,
+	syncPointcloudPassMaterial,
+} from "./PointcloudPassMaterialUtils.js";
+import {XraySplatPipeline} from "./XraySplatPipeline.js";
 
 export class HQSplatRenderer{
-	
+
 	constructor(viewer){
 		this.viewer = viewer;
-
 		this.depthMaterials = new Map();
 		this.attributeMaterials = new Map();
 		this.normalizationMaterial = null;
 		this.normalizationEDLMaterial = null;
-
 		this.rtDepth = null;
 		this.rtAttribute = null;
 		this.rtDepthEDL = null;
 		this.rtAttributeEDL = null;
 		this.gl = viewer.renderer.getContext();
-
+		this.xrayPipeline = new XraySplatPipeline(viewer);
 		this.initialized = false;
 	}
 
 	init(){
-		if (this.initialized) {
+		if(this.initialized){
 			return;
 		}
 
@@ -40,388 +43,288 @@ export class HQSplatRenderer{
 		this.normalizationEDLMaterial.depthTest = true;
 		this.normalizationEDLMaterial.depthWrite = true;
 		this.normalizationEDLMaterial.transparent = true;
-
-		this.rtDepth = new THREE.WebGLRenderTarget(1024, 1024, {
-			minFilter: THREE.NearestFilter,
-			magFilter: THREE.NearestFilter,
-			format: THREE.RGBAFormat,
-			type: THREE.FloatType,
-			depthTexture: new THREE.DepthTexture(undefined, undefined, THREE.UnsignedIntType)
-		});
-
-		this.rtAttribute = new THREE.WebGLRenderTarget(1024, 1024, {
-			minFilter: THREE.NearestFilter,
-			magFilter: THREE.NearestFilter,
-			format: THREE.RGBAFormat,
-			type: THREE.FloatType,
-			depthTexture: this.rtDepth.depthTexture,
-		});
-
-		this.rtDepthEDL = new THREE.WebGLRenderTarget(1024, 1024, {
-			minFilter: THREE.NearestFilter,
-			magFilter: THREE.NearestFilter,
-			format: THREE.RGBAFormat,
-			type: THREE.FloatType,
-			depthTexture: new THREE.DepthTexture(undefined, undefined, THREE.UnsignedIntType)
-		});
-
-		this.rtAttributeEDL = new THREE.WebGLRenderTarget(1024, 1024, {
-			minFilter: THREE.NearestFilter,
-			magFilter: THREE.NearestFilter,
-			format: THREE.RGBAFormat,
-			type: THREE.FloatType,
-			depthTexture: this.rtDepthEDL.depthTexture,
-		});
-
 		this.initialized = true;
-	};
-
-	resize(width, height){
-		this.rtDepth.setSize(width, height);
-		this.rtAttribute.setSize(width, height);
-		this.rtDepthEDL.setSize(width, height);
-		this.rtAttributeEDL.setSize(width, height);
 	}
 
-	clearTargets(){
-		const viewer = this.viewer;
-		const {renderer} = viewer;
+	_createDepthTarget(type = THREE.FloatType){
+		return new THREE.WebGLRenderTarget(1024, 1024, {
+			minFilter: THREE.NearestFilter,
+			magFilter: THREE.NearestFilter,
+			format: THREE.RGBAFormat,
+			type,
+			depthTexture: new THREE.DepthTexture(undefined, undefined, THREE.UnsignedIntType),
+		});
+	}
 
-		const oldTarget = renderer.getRenderTarget();
+	_createAttributeTarget(depthTexture, type = THREE.FloatType){
+		return new THREE.WebGLRenderTarget(1024, 1024, {
+			minFilter: THREE.NearestFilter,
+			magFilter: THREE.NearestFilter,
+			format: THREE.RGBAFormat,
+			type,
+			depthTexture,
+		});
+	}
+
+	_ensureStandardTargets(){
+		if(!this.rtDepth){
+			this.rtDepth = this._createDepthTarget();
+		}
+		if(!this.rtAttribute){
+			this.rtAttribute = this._createAttributeTarget(this.rtDepth.depthTexture);
+		}
+	}
+
+	_ensureEDLTargets(){
+		if(!this.rtDepthEDL){
+			this.rtDepthEDL = this._createDepthTarget();
+		}
+		if(!this.rtAttributeEDL){
+			this.rtAttributeEDL = this._createAttributeTarget(this.rtDepthEDL.depthTexture);
+		}
+	}
+
+	resize(width, height, targets = []){
+		for(const target of targets){
+			if(target.width !== width || target.height !== height){
+				target.setSize(width, height);
+			}
+		}
+	}
+
+	clearTargets(targetSpecs = []){
+		const {renderer} = this.viewer;
+		const previousTarget = renderer.getRenderTarget();
 
 		renderer.setClearColor(0x000000, 0);
-
-		renderer.setRenderTarget(this.rtDepth);
-		renderer.clear(true, true, true);
-
-		renderer.setRenderTarget(this.rtAttribute);
-		renderer.clear(true, true, true);
-
-		renderer.setRenderTarget(this.rtDepthEDL);
-		renderer.clear(true, true, true);
-
-		renderer.setRenderTarget(this.rtAttributeEDL);
-		renderer.clear(true, true, true);
-
-		renderer.setRenderTarget(oldTarget);
+		for(const {target, clearDepth = false} of targetSpecs){
+			renderer.setRenderTarget(target);
+			renderer.clear(true, clearDepth, false);
+		}
+		renderer.setRenderTarget(previousTarget);
 	}
-
 
 	clear(){
 		this.init();
-
 		const {renderer, background} = this.viewer;
 
-		if(background === "skybox"){
+		if(background === "skybox" || background === "gradient"){
 			renderer.setClearColor(0x000000, 0);
-		} else if (background === "gradient") {
-			renderer.setClearColor(0x000000, 0);
-		} else if (background === "black") {
+		}else if(background === "black"){
 			renderer.setClearColor(0x000000, 1);
-		} else if (background === "white") {
+		}else if(background === "white"){
 			renderer.setClearColor(0xFFFFFF, 1);
-		} else {
+		}else{
 			renderer.setClearColor(0x000000, 0);
 		}
 
 		renderer.clear();
-
-		this.clearTargets();
 	}
 
-	// 使用新的实现覆盖旧的数量判定逻辑，统一改为 sourceKind 驱动。
-	_prepareEffectMaterials(pointcloud, camera, isGroupSource, originalMaterials){
-		if (typeof isGroupSource !== "boolean") {
-			isGroupSource = isGroupPointcloudSource(this.viewer);
-		}
-
-		const effectState = getPointcloudEffectState(pointcloud, this.viewer.isEDLSupported());
-		const enabled = effectState.xrayEnabled;
-		const opacity = effectState.xrayOpacity;
-
-		originalMaterials.set(pointcloud, pointcloud.material);
-
-		let nearestDistance = 0;
-		let farthestDistance = 0;
-		let multiXrayOpacity = 0.01;
-		if(enabled){
-			const bbox = this.viewer.scene.getBoundingBox([pointcloud]);
-			const center = new THREE.Vector3();
-			bbox.getCenter(center);
-			const size = new THREE.Vector3();
-			bbox.getSize(size);
-			const maxDimension = Math.max(size.x, size.y, size.z);
-			const distanceToCenter = camera.position.distanceTo(center);
-			nearestDistance = Math.max(0, distanceToCenter - maxDimension / 2);
-			farthestDistance = distanceToCenter + maxDimension / 2;
-			multiXrayOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
-		}
-
+	_preparePassMaterials(pointcloud, originalMaterials){
 		if(!this.attributeMaterials.has(pointcloud)){
 			this.attributeMaterials.set(pointcloud, new PointCloudMaterial());
 		}
 		if(!this.depthMaterials.has(pointcloud)){
-			let depthMaterial = new PointCloudMaterial();
+			const depthMaterial = new PointCloudMaterial();
 			depthMaterial.setDefine("depth_pass", "#define hq_depth_pass");
 			this.depthMaterials.set(pointcloud, depthMaterial);
 		}
 
+		const effectState = getPointcloudEffectState(pointcloud, this.viewer.isEDLSupported());
 		const attributeMaterial = this.attributeMaterials.get(pointcloud);
 		const depthMaterial = this.depthMaterials.get(pointcloud);
-		const xrayUseDistanceRamp = isGroupSource ? 0 : 1;
 
-		attributeMaterial.useXRAY = enabled;
-		attributeMaterial.opacity = enabled ? opacity : 1.0;
-		if(enabled){
-			attributeMaterial.cameraPosition = camera.position;
-			attributeMaterial.uNear = nearestDistance;
-			attributeMaterial.uFar = farthestDistance;
-			attributeMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
-			attributeMaterial.uXrayMultiOpacity = multiXrayOpacity;
-		}
-
+		originalMaterials.set(pointcloud, pointcloud.material);
+		attributeMaterial.useEDL = false;
+		attributeMaterial.useXRAY = false;
+		attributeMaterial.opacity = 1.0;
 		depthMaterial.useEDL = effectState.edlEnabled;
-		depthMaterial.useXRAY = enabled;
-		depthMaterial.opacity = enabled ? opacity : 1.0;
-		if(enabled){
-			depthMaterial.cameraPosition = camera.position;
-			depthMaterial.uNear = nearestDistance;
-			depthMaterial.uFar = farthestDistance;
-			depthMaterial.uXrayUseDistanceRamp = xrayUseDistanceRamp;
-			depthMaterial.uXrayMultiOpacity = multiXrayOpacity;
-		}
+		depthMaterial.useXRAY = false;
+		depthMaterial.opacity = 1.0;
 	}
 
-	_renderPointcloudGroup(params) {
-		const {
-			pointclouds,
-			originalMaterials,
-			camera,
-			width,
-			height,
-			rtDepth,
-			rtAttribute,
-		} = params;
-
-		if (pointclouds.length === 0) {
+	_renderPointcloudGroup({pointclouds, originalMaterials, camera, width, height, rtDepth, rtAttribute}){
+		if(pointclouds.length === 0){
 			return;
 		}
 
-		{ // DEPTH PASS
-			for (let pointcloud of pointclouds) {
-				let octreeSize = pointcloud.pcoGeometry.boundingBox.getSize(new THREE.Vector3()).x;
-
-				let material = originalMaterials.get(pointcloud);
-				let depthMaterial = this.depthMaterials.get(pointcloud);
-
-				depthMaterial.size = material.size;
-				depthMaterial.minSize = material.minSize;
-				depthMaterial.maxSize = material.maxSize;
-
-				depthMaterial.pointSizeType = material.pointSizeType;
-				depthMaterial.visibleNodesTexture = material.visibleNodesTexture;
-				depthMaterial.weighted = false;
-				depthMaterial.screenWidth = width;
-				depthMaterial.shape = PointShape.CIRCLE;
-				depthMaterial.screenHeight = height;
-				depthMaterial.uniforms.visibleNodes.value = material.visibleNodesTexture;
-				depthMaterial.uniforms.octreeSize.value = octreeSize;
-				depthMaterial.spacing = pointcloud.pcoGeometry.spacing;
-				depthMaterial.classification = material.classification;
-				depthMaterial.uniforms.classificationLUT.value.image.data = material.uniforms.classificationLUT.value.image.data;
-				depthMaterial.classificationTexture.needsUpdate = true;
-
-				depthMaterial.uniforms.uFilterReturnNumberRange.value = material.uniforms.uFilterReturnNumberRange.value;
-				depthMaterial.uniforms.uFilterNumberOfReturnsRange.value = material.uniforms.uFilterNumberOfReturnsRange.value;
-				depthMaterial.uniforms.uFilterGPSTimeClipRange.value = material.uniforms.uFilterGPSTimeClipRange.value;
-				depthMaterial.uniforms.uFilterPointSourceIDClipRange.value = material.uniforms.uFilterPointSourceIDClipRange.value;
-
-				depthMaterial.clipTask = material.clipTask;
-				depthMaterial.clipMethod = material.clipMethod;
-				depthMaterial.setClipBoxes(material.clipBoxes);
-				depthMaterial.setClipPolygons(material.clipPolygons);
-
-				pointcloud.material = depthMaterial;
-			}
-			
-			this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, rtDepth, {
-				clipSpheres: this.viewer.scene.volumes.filter(v => (v instanceof SphereVolume)),
-				pointclouds: pointclouds,
+		for(const pointcloud of pointclouds){
+			const source = originalMaterials.get(pointcloud);
+			const depthMaterial = this.depthMaterials.get(pointcloud);
+			syncPointcloudPassMaterial(pointcloud, source, depthMaterial, {
+				width,
+				height,
+				weighted: false,
 			});
+			pointcloud.material = depthMaterial;
 		}
 
-		{ // ATTRIBUTE PASS
-			for (let pointcloud of pointclouds) {
-				let octreeSize = pointcloud.pcoGeometry.boundingBox.getSize(new THREE.Vector3()).x;
+		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, rtDepth, {
+			clipSpheres: this.viewer.scene.volumes.filter(volume => volume instanceof SphereVolume),
+			pointclouds,
+		});
 
-				let material = originalMaterials.get(pointcloud);
-				let attributeMaterial = this.attributeMaterials.get(pointcloud);
-
-				attributeMaterial.size = material.size;
-				attributeMaterial.minSize = material.minSize;
-				attributeMaterial.maxSize = material.maxSize;
-
-				attributeMaterial.pointSizeType = material.pointSizeType;
-				attributeMaterial.activeAttributeName = material.activeAttributeName;
-				attributeMaterial.visibleNodesTexture = material.visibleNodesTexture;
-				attributeMaterial.weighted = true;
-				attributeMaterial.screenWidth = width;
-				attributeMaterial.screenHeight = height;
-				attributeMaterial.shape = PointShape.CIRCLE;
-				attributeMaterial.uniforms.visibleNodes.value = material.visibleNodesTexture;
-				attributeMaterial.uniforms.octreeSize.value = octreeSize;
-				attributeMaterial.spacing = pointcloud.pcoGeometry.spacing;
-				attributeMaterial.classification = material.classification;
-				attributeMaterial.uniforms.classificationLUT.value.image.data = material.uniforms.classificationLUT.value.image.data;
-				attributeMaterial.classificationTexture.needsUpdate = true;
-
-				attributeMaterial.uniforms.uFilterReturnNumberRange.value = material.uniforms.uFilterReturnNumberRange.value;
-				attributeMaterial.uniforms.uFilterNumberOfReturnsRange.value = material.uniforms.uFilterNumberOfReturnsRange.value;
-				attributeMaterial.uniforms.uFilterGPSTimeClipRange.value = material.uniforms.uFilterGPSTimeClipRange.value;
-				attributeMaterial.uniforms.uFilterPointSourceIDClipRange.value = material.uniforms.uFilterPointSourceIDClipRange.value;
-
-				attributeMaterial.elevationGradientRepeat = material.elevationGradientRepeat;
-				attributeMaterial.elevationRange = material.elevationRange;
-				attributeMaterial.gradient = material.gradient;
-				attributeMaterial.matcap = material.matcap;
-
-				attributeMaterial.intensityRange = material.intensityRange;
-				attributeMaterial.intensityGamma = material.intensityGamma;
-				attributeMaterial.intensityContrast = material.intensityContrast;
-				attributeMaterial.intensityBrightness = material.intensityBrightness;
-
-				attributeMaterial.rgbGamma = material.rgbGamma;
-				attributeMaterial.rgbContrast = material.rgbContrast;
-				attributeMaterial.rgbBrightness = material.rgbBrightness;
-
-				attributeMaterial.weightRGB = material.weightRGB;
-				attributeMaterial.weightIntensity = material.weightIntensity;
-				attributeMaterial.weightElevation = material.weightElevation;
-				attributeMaterial.weightRGB = material.weightRGB;
-				attributeMaterial.weightClassification = material.weightClassification;
-				attributeMaterial.weightReturnNumber = material.weightReturnNumber;
-				attributeMaterial.weightSourceID = material.weightSourceID;
-
-				attributeMaterial.color = material.color;
-
-				attributeMaterial.clipTask = material.clipTask;
-				attributeMaterial.clipMethod = material.clipMethod;
-				attributeMaterial.setClipBoxes(material.clipBoxes);
-				attributeMaterial.setClipPolygons(material.clipPolygons);
-
-				pointcloud.material = attributeMaterial;
-			}
-			
-			let gl = this.gl;
-
-			this.viewer.renderer.setRenderTarget(null);
-			this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, rtAttribute, {
-				clipSpheres: this.viewer.scene.volumes.filter(v => (v instanceof SphereVolume)),
-				pointclouds: pointclouds,
-				blendFunc: [gl.SRC_ALPHA, gl.ONE],
-				depthWrite: false
+		for(const pointcloud of pointclouds){
+			const source = originalMaterials.get(pointcloud);
+			const attributeMaterial = this.attributeMaterials.get(pointcloud);
+			syncPointcloudPassMaterial(pointcloud, source, attributeMaterial, {
+				width,
+				height,
+				weighted: true,
+				includeColor: true,
 			});
+			pointcloud.material = attributeMaterial;
 		}
+
+		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, rtAttribute, {
+			clipSpheres: this.viewer.scene.volumes.filter(volume => volume instanceof SphereVolume),
+			pointclouds,
+			blendFunc: [this.gl.SRC_ALPHA, this.gl.ONE],
+			depthWrite: false,
+		});
 	}
 
 	_renderBackground(){
 		const viewer = this.viewer;
 
-		this.viewer.renderer.setRenderTarget(null);
+		viewer.renderer.setRenderTarget(null);
 		if(viewer.background === "skybox"){
-			this.viewer.renderer.setClearColor(0x000000, 0);
-			this.viewer.renderer.clear();
+			viewer.renderer.setClearColor(0x000000, 0);
+			viewer.renderer.clear();
 			viewer.skybox.camera.rotation.copy(viewer.scene.cameraP.rotation);
 			viewer.skybox.camera.fov = viewer.scene.cameraP.fov;
 			viewer.skybox.camera.aspect = viewer.scene.cameraP.aspect;
-			
 			viewer.skybox.parent.rotation.x = 0;
 			viewer.skybox.parent.updateMatrixWorld();
-
 			viewer.skybox.camera.updateProjectionMatrix();
-			this.viewer.renderer.render(viewer.skybox.scene, viewer.skybox.camera);
-		} else if (viewer.background === "gradient") {
-			this.viewer.renderer.setClearColor(0x000000, 0);
-			this.viewer.renderer.clear();
-			this.viewer.renderer.render(viewer.scene.sceneBG, viewer.scene.cameraBG);
-		} else if (viewer.background === "black") {
-			this.viewer.renderer.setClearColor(0x000000, 1);
-			this.viewer.renderer.clear();
-		} else if (viewer.background === "white") {
-			this.viewer.renderer.setClearColor(0xFFFFFF, 1);
-			this.viewer.renderer.clear();
-		} else {
-			this.viewer.renderer.setClearColor(0x000000, 0);
-			this.viewer.renderer.clear();
+			viewer.renderer.render(viewer.skybox.scene, viewer.skybox.camera);
+		}else if(viewer.background === "gradient"){
+			viewer.renderer.setClearColor(0x000000, 0);
+			viewer.renderer.clear();
+			viewer.renderer.render(viewer.scene.sceneBG, viewer.scene.cameraBG);
+		}else if(viewer.background === "black"){
+			viewer.renderer.setClearColor(0x000000, 1);
+			viewer.renderer.clear();
+		}else if(viewer.background === "white"){
+			viewer.renderer.setClearColor(0xFFFFFF, 1);
+			viewer.renderer.clear();
+		}else{
+			viewer.renderer.setClearColor(0x000000, 0);
+			viewer.renderer.clear();
 		}
 	}
 
-	_renderNormalizationPass(params){
-		const {rtDepth, rtAttribute, width, height, useEDL} = params;
-		const normalizationMaterial = useEDL ? this.normalizationEDLMaterial : this.normalizationMaterial;
+	_renderNormalizationPass({rtDepth, rtAttribute, width, height, useEDL}){
+		const material = useEDL ? this.normalizationEDLMaterial : this.normalizationMaterial;
 
 		if(useEDL){
-			normalizationMaterial.uniforms.edlStrength.value = this.viewer.edlStrength;
-			normalizationMaterial.uniforms.radius.value = this.viewer.edlRadius;
-			normalizationMaterial.uniforms.screenWidth.value = width;
-			normalizationMaterial.uniforms.screenHeight.value = height;
-			normalizationMaterial.uniforms.uEDLMap.value = rtDepth.texture;
+			material.uniforms.edlStrength.value = this.viewer.edlStrength;
+			material.uniforms.radius.value = this.viewer.edlRadius;
+			material.uniforms.screenWidth.value = width;
+			material.uniforms.screenHeight.value = height;
+			material.uniforms.uEDLMap.value = rtDepth.texture;
 		}
 
-		normalizationMaterial.uniforms.uWeightMap.value = rtAttribute.texture;
-		normalizationMaterial.uniforms.uDepthMap.value = rtAttribute.depthTexture;
-
-		Utils.screenPass.render(this.viewer.renderer, normalizationMaterial);
+		material.uniforms.uWeightMap.value = rtAttribute.texture;
+		material.uniforms.uDepthMap.value = rtAttribute.depthTexture;
+		Utils.screenPass.render(this.viewer.renderer, material);
 	}
 
-	render (params = {}) {
+	_pruneMaterialCaches(pointclouds){
+		const retained = new Set(pointclouds);
+		prunePointcloudMaterialMap(this.depthMaterials, retained);
+		prunePointcloudMaterialMap(this.attributeMaterials, retained);
+		this.xrayPipeline.prune(retained);
+	}
+
+	render(params = {}){
 		this.init();
-
 		const viewer = this.viewer;
-		const camera = params.camera ? params.camera : viewer.scene.getActiveCamera();
-		const {width, height} = this.viewer.renderer.getSize(new THREE.Vector2());
-
-		viewer.dispatchEvent({type: "render.pass.begin",viewer: viewer});
-
-		this.resize(width, height);
-
-		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible);
-		const {edlPointclouds, regularPointclouds} = partitionPointcloudsByEDL(visiblePointClouds, viewer.isEDLSupported());
-		const isGroupSource = isGroupPointcloudSource(viewer);
+		const camera = params.camera || viewer.scene.getActiveCamera();
+		const {width, height} = viewer.renderer.getSize(new THREE.Vector2());
+		const allPointclouds = viewer.scene.pointclouds;
+		const visiblePointclouds = allPointclouds.filter(pointcloud => pointcloud.visible);
+		const {edlPointclouds, regularPointclouds} = partitionPointcloudsByEDL(
+			visiblePointclouds,
+			viewer.isEDLSupported()
+		);
+		const xrayPointclouds = regularPointclouds.filter(pointcloud => {
+			return getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
+		});
+		const standardPointclouds = regularPointclouds.filter(pointcloud => {
+			return !getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
+		});
 		const originalMaterials = new Map();
+		const activeTargets = [];
+		const targetSpecs = [];
 
-		for(let pointcloud of visiblePointClouds){
-			// 先为所有可见点云准备派生材质，再按分组分别走 pass。
-			this._prepareEffectMaterials(pointcloud, camera, visiblePointClouds.length, originalMaterials);
+		viewer.dispatchEvent({type: "render.pass.begin", viewer});
+		this._pruneMaterialCaches(allPointclouds);
+
+		if(standardPointclouds.length > 0){
+			this._ensureStandardTargets();
+			activeTargets.push(this.rtDepth, this.rtAttribute);
+			targetSpecs.push(
+				{target: this.rtDepth, clearDepth: true},
+				{target: this.rtAttribute}
+			);
 		}
 
-		this._renderPointcloudGroup({
-			pointclouds: regularPointclouds,
-			originalMaterials,
-			camera,
-			width,
-			height,
-			rtDepth: this.rtDepth,
-			rtAttribute: this.rtAttribute,
-		});
+		if(edlPointclouds.length > 0){
+			this._ensureEDLTargets();
+			activeTargets.push(this.rtDepthEDL, this.rtAttributeEDL);
+			targetSpecs.push(
+				{target: this.rtDepthEDL, clearDepth: true},
+				{target: this.rtAttributeEDL}
+			);
+		}
 
-		this._renderPointcloudGroup({
-			pointclouds: edlPointclouds,
-			originalMaterials,
-			camera,
-			width,
-			height,
-			rtDepth: this.rtDepthEDL,
-			rtAttribute: this.rtAttributeEDL,
-		});
+		this.resize(width, height, activeTargets);
+		this.clearTargets(targetSpecs);
+		for(const pointcloud of [...standardPointclouds, ...edlPointclouds]){
+			this._preparePassMaterials(pointcloud, originalMaterials);
+		}
+		for(const pointcloud of xrayPointclouds){
+			originalMaterials.set(pointcloud, pointcloud.material);
+		}
 
-		for(let [pointcloud, material] of originalMaterials){
-			pointcloud.material = material;
+		try{
+			this._renderPointcloudGroup({
+				pointclouds: standardPointclouds,
+				originalMaterials,
+				camera,
+				width,
+				height,
+				rtDepth: this.rtDepth,
+				rtAttribute: this.rtAttribute,
+			});
+
+			this.xrayPipeline.renderToTargets({
+				pointclouds: xrayPointclouds,
+				originalMaterials,
+				camera,
+				width,
+				height,
+			});
+
+			this._renderPointcloudGroup({
+				pointclouds: edlPointclouds,
+				originalMaterials,
+				camera,
+				width,
+				height,
+				rtDepth: this.rtDepthEDL,
+				rtAttribute: this.rtAttributeEDL,
+			});
+		}finally{
+			for(const [pointcloud, material] of originalMaterials){
+				pointcloud.material = material;
+			}
 		}
 
 		this._renderBackground();
-
-		if (regularPointclouds.length > 0) {
+		if(standardPointclouds.length > 0){
 			this._renderNormalizationPass({
 				rtDepth: this.rtDepth,
 				rtAttribute: this.rtAttribute,
@@ -430,8 +333,10 @@ export class HQSplatRenderer{
 				useEDL: false,
 			});
 		}
-
-		if (edlPointclouds.length > 0) {
+		if(xrayPointclouds.length > 0){
+			this.xrayPipeline.resolve(viewer.getXrayRenderSettings());
+		}
+		if(edlPointclouds.length > 0){
 			this._renderNormalizationPass({
 				rtDepth: this.rtDepthEDL,
 				rtAttribute: this.rtAttributeEDL,
@@ -442,25 +347,46 @@ export class HQSplatRenderer{
 		}
 
 		viewer.renderer.render(viewer.scene.scene, camera);
-
-		viewer.dispatchEvent({type: "render.pass.scene", viewer: viewer});
-
+		viewer.dispatchEvent({type: "render.pass.scene", viewer});
 		viewer.renderer.clearDepth();
-
 		viewer.transformationTool.update();
-
-		viewer.dispatchEvent({type: "render.pass.perspective_overlay",viewer: viewer});
-
+		viewer.dispatchEvent({type: "render.pass.perspective_overlay", viewer});
 		viewer.renderer.render(viewer.controls.sceneControls, camera);
 		viewer.renderer.render(viewer.clippingTool.sceneVolume, camera);
 		viewer.renderer.render(viewer.transformationTool.scene, camera);
-
-		viewer.renderer.setViewport(width - viewer.navigationCube.width, 
-									height - viewer.navigationCube.width, 
-									viewer.navigationCube.width, viewer.navigationCube.width);
-		viewer.renderer.render(viewer.navigationCube, viewer.navigationCube.camera);		
+		viewer.renderer.setViewport(
+			width - viewer.navigationCube.width,
+			height - viewer.navigationCube.width,
+			viewer.navigationCube.width,
+			viewer.navigationCube.width
+		);
+		viewer.renderer.render(viewer.navigationCube, viewer.navigationCube.camera);
 		viewer.renderer.setViewport(0, 0, width, height);
-		
-		viewer.dispatchEvent({type: "render.pass.end",viewer: viewer});
+		viewer.dispatchEvent({type: "render.pass.end", viewer});
+	}
+
+	_disposeTargetPair(depthTarget, attributeTarget){
+		if(depthTarget && attributeTarget && attributeTarget.depthTexture === depthTarget.depthTexture){
+			attributeTarget.depthTexture = null;
+		}
+		attributeTarget?.dispose();
+		depthTarget?.dispose();
+	}
+
+	dispose(){
+		disposePointcloudMaterialMap(this.depthMaterials);
+		disposePointcloudMaterialMap(this.attributeMaterials);
+		this._disposeTargetPair(this.rtDepth, this.rtAttribute);
+		this._disposeTargetPair(this.rtDepthEDL, this.rtAttributeEDL);
+		this.normalizationMaterial?.dispose();
+		this.normalizationEDLMaterial?.dispose();
+		this.xrayPipeline.dispose();
+		this.rtDepth = null;
+		this.rtAttribute = null;
+		this.rtDepthEDL = null;
+		this.rtAttributeEDL = null;
+		this.normalizationMaterial = null;
+		this.normalizationEDLMaterial = null;
+		this.initialized = false;
 	}
 }

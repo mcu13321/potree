@@ -868,7 +868,8 @@ void main() {
 	gl_Position = projectionMatrix * mvPosition;
 	vLogDepth = log2(-mvPosition.z);
 
-	vDistance = length(cameraPosition - mvPosition.xyz);
+	// View-space camera position is the origin, so this distance is rotation invariant.
+	vDistance = length(mvPosition.xyz);
 
 	//gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
 	//gl_PointSize = 5.0;
