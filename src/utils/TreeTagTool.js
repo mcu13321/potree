@@ -123,7 +123,10 @@ export class TreeTagTool extends EventDispatcher {
 		}
 
 		// 如果测量工具正在绘制标记，则跳过 TreeTagTool 的指针事件处理，避免功能冲突。
-		if (this.viewer.measuringTool?.eventMeasurement) {
+		if (
+			this.viewer.measuringTool?.eventMeasurement ||
+			this.viewer.axisLineMarkerTool?.activeMarker
+		) {
 			return;
 		}
 

@@ -279,6 +279,18 @@ describe("TreeTagTool", () => {
 		expectEffectState(pc2, { edlEnabled: true, xrayEnabled: false });
 	});
 
+	it("does not select tree tags while axis-line insertion is active", () => {
+		viewer.scene.addPointCloud(createMockPointcloud("pc1"));
+		viewer.scene.addPointCloud(createMockPointcloud("pc2"));
+		viewer.axisLineMarkerTool = {activeMarker: {}};
+		const pickSpy = vi.spyOn(tool, "_pickTag");
+
+		dispatchPointerTap(viewer.renderer.domElement);
+
+		expect(pickSpy).not.toHaveBeenCalled();
+		expect(tool.highlightedKeys).toEqual([]);
+	});
+
 	it("单选时再次点击已选中标签会取消选中并恢复全部 EDL", () => {
 		const pc1 = createMockPointcloud("pc1");
 		const pc2 = createMockPointcloud("pc2");

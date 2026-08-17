@@ -60,6 +60,8 @@ export * from "./utils/Volume.js";
 export * from "./utils/VolumeTool.js";
 export * from "./utils/TreeTag.js";
 export * from "./utils/TreeTagTool.js";
+export * from "./utils/AxisLineMarker.js";
+export * from "./utils/AxisLineMarkerTool.js";
 export * from "./utils/TrackPointTool.js";
 export * from "./utils/Compass.js";
 export * from "./utils/RectangleSVGTool.js";

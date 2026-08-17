@@ -143,10 +143,16 @@ export class MeasuringTool extends EventDispatcher{
 
 		// 测量对象进入或离开场景时，同时同步管理其 DOM 标签生命周期。
 		this.onRemove = (e) => {
+			if (e.measurement?.isAxisLineMarker) {
+				return;
+			}
 			this.disposeMeasurementLabels(e.measurement);
 			this.scene.remove(e.measurement);
 		};
 		this.onAdd = e => {
+			if (e.measurement?.isAxisLineMarker) {
+				return;
+			}
 			this.scene.add(e.measurement);
 			this.syncMeasurementLabels(e.measurement);
 		};
@@ -298,6 +304,10 @@ export class MeasuringTool extends EventDispatcher{
 	}
 
 	startInsertion (args = {}) {
+		this.viewer.axisLineMarkerTool?.stopInsertion?.({
+			discardDraft: true,
+			reason: "other_measurement_started",
+		});
 		this.measurementTypeName = args.name;
 		
 		this.viewer.scene.measurements.forEach(measurement => {
@@ -493,6 +503,9 @@ export class MeasuringTool extends EventDispatcher{
 		const isMobile = dpr > 1.5;
 		// make size independant of distance
 		for (let measure of measurements) {
+			if (measure.isAxisLineMarker) {
+				continue;
+			}
 			measure.lengthUnit = this.viewer.lengthUnit;
 			measure.lengthUnitDisplay = this.viewer.lengthUnitDisplay;
 			measure.update();

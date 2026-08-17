@@ -147,6 +147,14 @@ export function loadMeasurement(viewer, data){
 		return
 	}
 
+	if (data.type === "AxisLineMarker" || data.name === "axisLine") {
+		return viewer.axisLineMarkerTool?.importAxisLines({
+			uuid: data.uuid,
+			visible: data.visible !== false,
+			points: data.points,
+		})?.[0];
+	}
+
 	const measure = new Measure(viewer);
 
 	measure.uuid = data.uuid;

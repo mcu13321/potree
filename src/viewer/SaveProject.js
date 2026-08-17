@@ -110,6 +110,9 @@ function createCameraAnimationData(animation){
  export function createMeasurementData(measurement){
 
 	const data = {
+		...(measurement.isAxisLineMarker
+			? {type: "AxisLineMarker", visible: measurement.visible !== false}
+			: {}),
 		uuid: measurement.uuid,
 		name: measurement.name,
 		points: measurement.points.map(p => p.position.toArray()),
@@ -123,7 +126,7 @@ function createCameraAnimationData(animation){
 		showAzimuth: measurement.showAzimuth,
 		showEdges: measurement.showEdges,
 		color: measurement.color.toArray(),
-		finished: !!measurement.finished
+		finished: !!measurement.finished,
 	};
 
 	return data;
@@ -266,7 +269,9 @@ export function saveProject(viewer) {
 		view: createViewData(viewer),
 		classification: createClassificationData(viewer),
 		pointclouds: scene.pointclouds.map(createPointcloudData),
-		measurements: scene.measurements.map(createMeasurementData),
+		measurements: scene.measurements
+			.filter((measurement) => !measurement.isAxisLineMarker || measurement.finished)
+			.map(createMeasurementData),
 		volumes: scene.volumes.map(createVolumeData),
 		cameraAnimations: scene.cameraAnimations.map(createCameraAnimationData),
 		profiles: scene.profiles.map(createProfileData),
