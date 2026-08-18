@@ -108,6 +108,18 @@ function createCameraAnimationData(animation){
 }
 
  export function createMeasurementData(measurement){
+	if (measurement.isCadVector && !measurement.isAxisLineMarker) {
+		return {
+			type: "CadVector",
+			uuid: measurement.uuid,
+			name: measurement.name,
+			vectorType: measurement.vectorType,
+			visible: measurement.visible !== false,
+			coordinateSpace: "scene",
+			paths: measurement.getPathData(),
+			finished: true,
+		};
+	}
 
 	const data = {
 		...(measurement.isAxisLineMarker

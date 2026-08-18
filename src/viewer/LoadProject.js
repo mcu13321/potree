@@ -136,6 +136,16 @@ function loadPointCloud(viewer, data){
 }
 
 export function loadMeasurement(viewer, data){
+	if (data.type === "CadVector") {
+		return viewer.cadVectorTool?.importVectors({
+			uuid: data.uuid,
+			name: data.name,
+			vectorType: data.vectorType,
+			visible: data.visible !== false,
+			coordinateSpace: data.coordinateSpace,
+			paths: data.paths,
+		})?.[0];
+	}
 
 	const duplicate = viewer.scene.measurements.find(measure => measure.uuid === data.uuid);
 	if(duplicate){

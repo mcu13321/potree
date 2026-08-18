@@ -7,6 +7,17 @@ import {
 } from "../src/utils/AxisLineMarker.js";
 
 describe("AxisLineMarker", () => {
+	it("is a single-path CAD vector while keeping its preview outside committed points", () => {
+		const marker = new AxisLineMarker();
+		marker.addPoint(new THREE.Vector3(1, 2, 3));
+		marker.setPreviewPoint(new THREE.Vector3(4, 5, 6));
+
+		expect(marker.isCadVector).toBe(true);
+		expect(marker.vectorType).toBe("axisLine");
+		expect(marker.paths).toHaveLength(1);
+		expect(marker.points).toHaveLength(1);
+		expect(marker.line.visible).toBe(true);
+	});
 	it("renders only a white polyline and keeps preview outside committed points", () => {
 		const marker = new AxisLineMarker();
 		marker.addPoint(new THREE.Vector3(1, 2, 3));

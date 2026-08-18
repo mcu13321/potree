@@ -1,7 +1,5 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {Line2} from "../../libs/three.js/lines/Line2.js";
-import {LineGeometry} from "../../libs/three.js/lines/LineGeometry.js";
-import {LineMaterial} from "../../libs/three.js/lines/LineMaterial.js";
+import {CAD_VECTOR_COORDINATE_SPACE, CadVector} from "./CadVector.js";
 
 export const AXIS_LINE_NAME = "axisLine";
 export const AXIS_LINE_DEFAULT_XY_TOLERANCES = Object.freeze([0.02, 0.05, 0.1, 0.2]);
@@ -52,47 +50,24 @@ export function selectAxisLineLowestPoint(origin, candidates, tolerances) {
 	return null;
 }
 
-export class AxisLineMarker extends THREE.Object3D {
+export class AxisLineMarker extends CadVector {
 	constructor({uuid, visible = true} = {}) {
-		super();
+		super({
+			uuid,
+			visible,
+			name: AXIS_LINE_NAME,
+			vectorType: AXIS_LINE_NAME,
+			coordinateSpace: CAD_VECTOR_COORDINATE_SPACE.SCENE,
+		});
 
-		if (uuid) {
-			this.uuid = uuid;
-		}
 		this.name = AXIS_LINE_NAME;
 		this.isAxisLineMarker = true;
 		this.finished = false;
 		this.isFinished = false;
 		this.isFinalizing = false;
-		this.visible = visible;
 		this.points = [];
+		this.paths = [{closed: false, points: this.points}];
 		this.previewPoint = null;
-		this.color = new THREE.Color(0xffffff);
-
-		this.showDistances = false;
-		this.showCoordinates = false;
-		this.showArea = false;
-		this.closed = false;
-		this.showAngles = false;
-		this.showHeight = false;
-		this.showCircle = false;
-		this.showAzimuth = false;
-		this.showEdges = true;
-
-		const geometry = new LineGeometry();
-		geometry.setPositions([0, 0, 0, 0, 0, 0]);
-		const material = new LineMaterial({
-			color: 0xffffff,
-			linewidth: 2,
-			resolution: new THREE.Vector2(1000, 1000),
-		});
-		material.depthTest = false;
-		material.depthWrite = false;
-
-		this.line = new Line2(geometry, material);
-		this.line.frustumCulled = false;
-		this.line.visible = false;
-		this.add(this.line);
 	}
 
 	addPoint(position, pointcloud = null) {
@@ -110,42 +85,27 @@ export class AxisLineMarker extends THREE.Object3D {
 
 	setFinalPoints(positions) {
 		this.points = positions.map((position) => ({position: toVector3(position), pointcloud: null}));
+		this.paths = [{closed: false, points: this.points}];
 		this.previewPoint = null;
 		this.update();
 	}
 
 	clear() {
 		this.points = [];
+		this.paths = [{closed: false, points: this.points}];
 		this.previewPoint = null;
 		this.update();
 		this.dispatchEvent({type: "marker_removed", measurement: this});
 	}
 
-	updateResolution(width, height) {
-		this.line.material.resolution.set(Math.max(width, 1), Math.max(height, 1));
-	}
-
-	update() {
-		const positions = this.points.map((point) => point.position);
-		if (this.previewPoint && positions.length > 0) {
-			positions.push(this.previewPoint);
+	getRenderablePaths() {
+		if (!this.previewPoint || this.points.length === 0) {
+			return this.paths;
 		}
 
-		if (positions.length < 2) {
-			this.line.visible = false;
-			return;
-		}
-
-		this.line.geometry.setPositions(positions.flatMap((position) => position.toArray()));
-		// Three.js r124 caches the first rendered segment count, so invalidate it when this polyline grows.
-		delete this.line.geometry._maxInstanceCount;
-		this.line.geometry.computeBoundingSphere();
-		this.line.computeLineDistances();
-		this.line.visible = true;
-	}
-
-	dispose() {
-		this.line.geometry.dispose();
-		this.line.material.dispose();
+		return [{
+			closed: false,
+			points: [...this.points, {position: this.previewPoint}],
+		}];
 	}
 }

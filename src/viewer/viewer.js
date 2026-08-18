@@ -27,6 +27,7 @@ import {MeasuringTool} from "../utils/MeasuringTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
 import {TreeTagTool} from "../utils/TreeTagTool.js";
+import {CadVectorTool} from "../utils/CadVectorTool.js";
 import {AxisLineMarkerTool} from "../utils/AxisLineMarkerTool.js";
 import {TrackPointTool} from "../utils/TrackPointTool.js";
 import {DefectMarkerTool} from "../utils/DefectMarkerTool.js";
@@ -378,6 +379,7 @@ export class Viewer extends EventDispatcher{
 
 		this.annotationTool = new AnnotationTool(this);
 		this.measuringTool = new MeasuringTool(this);
+		this.cadVectorTool = new CadVectorTool(this);
 		this.axisLineMarkerTool = new AxisLineMarkerTool(this);
 		this.measureMagnifier = new MeasureMagnifier(this);
 		this.profileTool = new ProfileTool(this);

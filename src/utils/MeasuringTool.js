@@ -143,14 +143,14 @@ export class MeasuringTool extends EventDispatcher{
 
 		// 测量对象进入或离开场景时，同时同步管理其 DOM 标签生命周期。
 		this.onRemove = (e) => {
-			if (e.measurement?.isAxisLineMarker) {
+			if (e.measurement?.isCadVector) {
 				return;
 			}
 			this.disposeMeasurementLabels(e.measurement);
 			this.scene.remove(e.measurement);
 		};
 		this.onAdd = e => {
-			if (e.measurement?.isAxisLineMarker) {
+			if (e.measurement?.isCadVector) {
 				return;
 			}
 			this.scene.add(e.measurement);
@@ -503,7 +503,7 @@ export class MeasuringTool extends EventDispatcher{
 		const isMobile = dpr > 1.5;
 		// make size independant of distance
 		for (let measure of measurements) {
-			if (measure.isAxisLineMarker) {
+			if (measure.isCadVector) {
 				continue;
 			}
 			measure.lengthUnit = this.viewer.lengthUnit;
