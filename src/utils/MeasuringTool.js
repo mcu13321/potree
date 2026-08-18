@@ -1,6 +1,6 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {Measure} from "./Measure.js";
+import {Measure, setMeasureLinePositions} from "./Measure.js";
 import {Utils} from "../utils.js";
 import {CameraMode} from "../defines.js";
 import { EventDispatcher } from "../EventDispatcher.js";
@@ -59,44 +59,35 @@ function updateAzimuth(viewer, measure){
 
 	azimuth.circle.position.copy(p0.position);
 	azimuth.circle.scale.set(r, r, r);
-	azimuth.circle.material.resolution.set(width, height);
+	azimuth.circle.material.resolution?.set(width, height);
 
 	// to target
-	azimuth.centerToTarget.geometry.setPositions([
+	setMeasureLinePositions(azimuth.centerToTarget, [
 		0, 0, 0,
 		...p1.position.clone().sub(p0.position).toArray(),
 	]);
 	azimuth.centerToTarget.position.copy(p0.position);
-	azimuth.centerToTarget.geometry.verticesNeedUpdate = true;
-	azimuth.centerToTarget.geometry.computeBoundingSphere();
-	azimuth.centerToTarget.computeLineDistances();
-	azimuth.centerToTarget.material.resolution.set(width, height);
+	azimuth.centerToTarget.material.resolution?.set(width, height);
 
 	// to target ground
-	azimuth.centerToTargetground.geometry.setPositions([
+	setMeasureLinePositions(azimuth.centerToTargetground, [
 		0, 0, 0,
 		p1.position.x - p0.position.x,
 		p1.position.y - p0.position.y,
 		0,
 	]);
 	azimuth.centerToTargetground.position.copy(p0.position);
-	azimuth.centerToTargetground.geometry.verticesNeedUpdate = true;
-	azimuth.centerToTargetground.geometry.computeBoundingSphere();
-	azimuth.centerToTargetground.computeLineDistances();
-	azimuth.centerToTargetground.material.resolution.set(width, height);
+	azimuth.centerToTargetground.material.resolution?.set(width, height);
 
 	// to north
-	azimuth.centerToNorth.geometry.setPositions([
+	setMeasureLinePositions(azimuth.centerToNorth, [
 		0, 0, 0,
 		northPos.x - p0.position.x,
 		northPos.y - p0.position.y,
 		0,
 	]);
 	azimuth.centerToNorth.position.copy(p0.position);
-	azimuth.centerToNorth.geometry.verticesNeedUpdate = true;
-	azimuth.centerToNorth.geometry.computeBoundingSphere();
-	azimuth.centerToNorth.computeLineDistances();
-	azimuth.centerToNorth.material.resolution.set(width, height);
+	azimuth.centerToNorth.material.resolution?.set(width, height);
 
 	// label
 	const radians = Utils.computeAzimuth(p0.position, p1.position, viewer.getProjection());
@@ -148,6 +139,8 @@ export class MeasuringTool extends EventDispatcher{
 			}
 			this.disposeMeasurementLabels(e.measurement);
 			this.scene.remove(e.measurement);
+			// Release measurement GPU resources after detaching it from the overlay scene.
+			e.measurement?.dispose?.();
 		};
 		this.onAdd = e => {
 			if (e.measurement?.isCadVector) {
@@ -627,11 +620,12 @@ export class MeasuringTool extends EventDispatcher{
 					let lToS = lowEL.distanceTo(startEL);
 					let sToE = startEL.distanceTo(endEL);
 
-					edge.geometry.lineDistances = [0, lToS, lToS, lToS + sToE];
-					edge.geometry.lineDistancesNeedUpdate = true;
-
-					edge.material.dashSize = 10;
-					edge.material.gapSize = 10;
+					if (edge.isLine2) {
+						edge.geometry.lineDistances = [0, lToS, lToS, lToS + sToE];
+						edge.geometry.lineDistancesNeedUpdate = true;
+						edge.material.dashSize = 10;
+						edge.material.gapSize = 10;
+					}
 				}
 			}
 
@@ -657,7 +651,7 @@ export class MeasuringTool extends EventDispatcher{
 				];
 
 				for(const material of materials){
-					material.resolution.set(clientWidth, clientHeight);
+					material.resolution?.set(clientWidth, clientHeight);
 				}
 			}
 
