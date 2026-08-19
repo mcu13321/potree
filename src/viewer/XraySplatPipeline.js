@@ -226,7 +226,8 @@ export class XraySplatPipeline{
 		}
 	}
 
-	resolve(settings){
+	// An explicit target keeps the normalized XRAY result inside the magnifier texture.
+	resolve(settings, target = undefined){
 		if(!this.frontTarget || !this.accumulationTarget){
 			return;
 		}
@@ -240,7 +241,11 @@ export class XraySplatPipeline{
 		uniforms.uMaxOpacity.value = settings.maxOpacity;
 		uniforms.uFrontDetailStrength.value = settings.frontDetailStrength;
 		uniforms.uColorGamma.value = settings.colorGamma;
-		Utils.screenPass.render(this.viewer.renderer, this.resolveMaterial);
+		if (target) {
+			Utils.screenPass.render(this.viewer.renderer, this.resolveMaterial, target);
+		} else {
+			Utils.screenPass.render(this.viewer.renderer, this.resolveMaterial);
+		}
 	}
 
 	prune(pointclouds){

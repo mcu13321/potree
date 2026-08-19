@@ -1,5 +1,4 @@
 import * as THREE from '../../libs/three.js/build/three.module.js'
-import { PointSizeType } from '../defines.js'
 
 const RENDER_SIZE = 192
 const MAGNIFIER_DIAMETER_PX = 144
@@ -57,8 +56,6 @@ export class MeasureMagnifier {
 		this._latestPoint = null
 		this._latestClientX = 0
 		this._latestClientY = 0
-		this._originalPointSizeTypes = new Map()
-
 		this._renderTarget = new THREE.WebGLRenderTarget(RENDER_SIZE, RENDER_SIZE, {
 			depthBuffer: true,
 			samples: 0,
@@ -110,18 +107,14 @@ export class MeasureMagnifier {
 		viewer.measuringTool.scene.add(this._ringMesh)
 
 		this._onMouseMove = this._onMouseMove.bind(this)
-		this._onUpdate = this._onUpdate.bind(this)
 		this._onRenderOverlay = this._onRenderOverlay.bind(this)
 	}
 
 	start() {
 		if (this.active) return
 		this.active = true
-		this._syncPointSizeTypes()
-
 		const el = this.viewer.renderer.domElement
 		el.addEventListener('mousemove', this._onMouseMove)
-		this.viewer.addEventListener('update', this._onUpdate)
 		this.viewer.addEventListener('render.pass.end', this._onRenderOverlay)
 	}
 
@@ -131,10 +124,7 @@ export class MeasureMagnifier {
 
 		const el = this.viewer.renderer.domElement
 		el.removeEventListener('mousemove', this._onMouseMove)
-		this.viewer.removeEventListener('update', this._onUpdate)
 		this.viewer.removeEventListener('render.pass.end', this._onRenderOverlay)
-		this._restorePointSizeTypes()
-
 		this._circleMesh.visible = false
 		this._ringMesh.visible = false
 		this._latestPoint = null
@@ -149,35 +139,6 @@ export class MeasureMagnifier {
 		this._circleMesh.geometry.dispose()
 		this._ringMesh.geometry.dispose()
 		this._renderTarget.dispose()
-	}
-
-	_onUpdate() {
-		this._syncPointSizeTypes()
-	}
-
-	_syncPointSizeTypes() {
-		// Shared point-cloud materials keep stable pixel sizes in both render passes.
-		for (const pointCloud of this.viewer.scene?.pointclouds || []) {
-			const material = pointCloud?.material
-			if (!material || !('pointSizeType' in material)) continue
-
-			if (!this._originalPointSizeTypes.has(material)) {
-				this._originalPointSizeTypes.set(material, material.pointSizeType)
-			}
-			if (material.pointSizeType !== PointSizeType.FIXED) {
-				// Retain the latest non-fixed mode selected while magnification is active.
-				this._originalPointSizeTypes.set(material, material.pointSizeType)
-				material.pointSizeType = PointSizeType.FIXED
-			}
-		}
-	}
-
-	_restorePointSizeTypes() {
-		// Restore each material exactly to the mode it had before magnification started.
-		for (const [material, originalPointSizeType] of this._originalPointSizeTypes) {
-			material.pointSizeType = originalPointSizeType
-		}
-		this._originalPointSizeTypes.clear()
 	}
 
 	_onMouseMove(event) {
@@ -342,7 +303,6 @@ export class MeasureMagnifier {
 	_renderToTarget(magnifierCamera) {
 		const renderer = this.viewer.renderer
 		const scene = this.viewer.scene
-		const pRenderer = this.viewer.pRenderer
 
 		const previousTarget = renderer.getRenderTarget()
 		const previousAutoClear = renderer.autoClear
@@ -382,11 +342,23 @@ export class MeasureMagnifier {
 			renderer.autoClear = false
 			this._renderBackground(magnifierCamera, previousClearColor)
 
-			pRenderer.render(scene.scenePointCloud, magnifierCamera, this._renderTarget, {
-				clipSpheres: scene.volumes.filter(
-					(v) => v.constructor?.name === 'SphereVolume'
-				),
-			})
+			// Reuse the active effect renderer so EDL and XRAY keep their main-view compositing.
+			const effectRenderer = this.viewer.getPRenderer?.()
+			if (effectRenderer?.render) {
+				effectRenderer.render({
+					camera: magnifierCamera,
+					offscreen: true,
+					skipBackground: true,
+					target: this._renderTarget,
+				})
+			} else {
+				// Keep compatibility with older viewers that do not expose effect renderers.
+				this.viewer.pRenderer.render(scene.scenePointCloud, magnifierCamera, this._renderTarget, {
+					clipSpheres: scene.volumes.filter(
+						(v) => v.constructor?.name === 'SphereVolume'
+					),
+				})
+			}
 
 			// Match Potree's overlay pass so the active measurement point stays visible in the lens.
 			renderer.clearDepth()

@@ -48,16 +48,25 @@ export class PotreeRenderer {
 	render(params){
 		let {viewer, renderer} = this;
 
+		// Offscreen passes reuse this renderer without dispatching viewer overlay events.
 		const camera = params.camera ? params.camera : viewer.scene.getActiveCamera();
+		const target = params.target || null;
+		const offscreen = params.offscreen === true;
+		const skipBackground = params.skipBackground === true;
+		if (target) {
+			renderer.setRenderTarget(target);
+		}
 
-		viewer.dispatchEvent({type: "render.pass.begin",viewer: viewer});
+		if (!offscreen) {
+			viewer.dispatchEvent({type: "render.pass.begin",viewer: viewer});
+		}
 
 		const renderAreaSize = renderer.getSize(new THREE.Vector2());
 		const width = params.viewport ? params.viewport[2] : renderAreaSize.x;
 		const height = params.viewport ? params.viewport[3] : renderAreaSize.y;
 
 		// render skybox
-		if(viewer.background === "skybox"){
+		if(!skipBackground && viewer.background === "skybox"){
 			viewer.skybox.camera.rotation.copy(viewer.scene.cameraP.rotation);
 			viewer.skybox.camera.fov = viewer.scene.cameraP.fov;
 			viewer.skybox.camera.aspect = viewer.scene.cameraP.aspect;
@@ -67,7 +76,7 @@ export class PotreeRenderer {
 
 			viewer.skybox.camera.updateProjectionMatrix();
 			renderer.render(viewer.skybox.scene, viewer.skybox.camera);
-		}else if(viewer.background === "gradient"){
+		}else if(!skipBackground && viewer.background === "gradient"){
 			renderer.render(viewer.scene.sceneBG, viewer.scene.cameraBG);
 		}
 		
@@ -111,7 +120,7 @@ export class PotreeRenderer {
 			}
 		}
 		
-		viewer.pRenderer.render(viewer.scene.scenePointCloud, camera, null, {
+		viewer.pRenderer.render(viewer.scene.scenePointCloud, camera, target, {
 			clipSpheres: viewer.scene.volumes.filter(v => (v instanceof Potree.SphereVolume)),
 			// 标准渲染器仅负责非 EDL 点云；EDL 点云会在专用渲染器中单独处理。
 			pointclouds: visiblePointClouds.filter((pointcloud) => {
@@ -120,7 +129,12 @@ export class PotreeRenderer {
 		});
 		
 		// render scene
+		renderer.setRenderTarget(target);
 		renderer.render(viewer.scene.scene, camera);
+
+		if (offscreen) {
+			return;
+		}
 
 		viewer.dispatchEvent({type: "render.pass.scene",viewer: viewer});
 		

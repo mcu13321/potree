@@ -219,14 +219,14 @@ export class EDLRenderer{
 		}
 	}
 
-	_renderRegularPointclouds(pointclouds, camera, isGroupSource){
+	_renderRegularPointclouds(pointclouds, camera, isGroupSource, target = null){
 		if (pointclouds.length === 0) {
 			return;
 		}
 
 		this._configureRegularPointclouds(pointclouds, camera, isGroupSource);
 
-		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, null, {
+		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, target, {
 			clipSpheres: this.viewer.scene.volumes.filter(v => (v instanceof SphereVolume)),
 			pointclouds: pointclouds,
 		});
@@ -275,10 +275,21 @@ export class EDLRenderer{
 		this.initEDL();
 
 		const viewer = this.viewer;
+		// An explicit target lets the magnifier reuse the complete EDL resolve pass.
 		let camera = params.camera ? params.camera : viewer.scene.getActiveCamera();
-		const {width, height} = this.viewer.renderer.getSize(new THREE.Vector2());
+		const target = params.target || null;
+		const offscreen = params.offscreen === true;
+		const skipBackground = params.skipBackground === true;
+		const size = this.viewer.renderer.getSize(new THREE.Vector2());
+		const width = target?.width || size.x;
+		const height = target?.height || size.y;
+		if (target) {
+			viewer.renderer.setRenderTarget(target);
+		}
 
-		viewer.dispatchEvent({type: "render.pass.begin",viewer: viewer});
+		if (!offscreen) {
+			viewer.dispatchEvent({type: "render.pass.begin",viewer: viewer});
+		}
 		
 		this.resize(width, height);
 
@@ -303,7 +314,7 @@ export class EDLRenderer{
 			}
 		});
 
-		if(viewer.background === "skybox"){
+		if(!skipBackground && viewer.background === "skybox"){
 			viewer.skybox.camera.rotation.copy(viewer.scene.cameraP.rotation);
 			viewer.skybox.camera.fov = viewer.scene.cameraP.fov;
 			viewer.skybox.camera.aspect = viewer.scene.cameraP.aspect;
@@ -313,17 +324,23 @@ export class EDLRenderer{
 
 			viewer.skybox.camera.updateProjectionMatrix();
 			viewer.renderer.render(viewer.skybox.scene, viewer.skybox.camera);
-		} else if (viewer.background === "gradient") {
+		} else if (!skipBackground && viewer.background === "gradient") {
 			viewer.renderer.render(viewer.scene.sceneBG, viewer.scene.cameraBG);
 		}
 
 		// 仅对启用了 EDL 的点云更新阴影贴图，避免混入普通点云。
 		this.renderShadowMap(edlPointclouds, camera, lights);
-		this._renderRegularPointclouds(regularPointclouds, camera, isGroupSource);
+		if (target) {
+			this._renderRegularPointclouds(regularPointclouds, camera, isGroupSource, target);
+		} else {
+			this._renderRegularPointclouds(regularPointclouds, camera, isGroupSource);
+		}
 		this._renderEDLPointclouds(edlPointclouds, camera, width, height, lights);
 
-		viewer.dispatchEvent({type: "render.pass.scene", viewer: viewer, renderTarget: this.rtRegular});
-		viewer.renderer.setRenderTarget(null);
+		if (!offscreen) {
+			viewer.dispatchEvent({type: "render.pass.scene", viewer: viewer, renderTarget: this.rtRegular});
+		}
+		viewer.renderer.setRenderTarget(target);
 		viewer.renderer.render(viewer.scene.scene, camera);
 
 		if (edlPointclouds.length > 0) {
@@ -346,11 +363,19 @@ export class EDLRenderer{
 			uniforms.radius.value = viewer.edlRadius;
 			uniforms.opacity.value = viewer.edlOpacity;
 			
-			Utils.screenPass.render(viewer.renderer, this.edlMaterial);
+			if (target) {
+				Utils.screenPass.render(viewer.renderer, this.edlMaterial, target);
+			} else {
+				Utils.screenPass.render(viewer.renderer, this.edlMaterial);
+			}
 
 			if(this.screenshot){
 				Utils.screenPass.render(viewer.renderer, this.edlMaterial, this.screenshot.target);
 			}
+		}
+
+		if (offscreen) {
+			return;
 		}
 
 		viewer.dispatchEvent({type: "render.pass.scene", viewer: viewer});

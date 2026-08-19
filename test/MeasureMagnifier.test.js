@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from '../libs/three.js/build/three.module.js'
-import { PointSizeType } from '../src/defines.js'
 import { MeasureMagnifier } from '../src/utils/MeasureMagnifier.js'
 
 function createViewer() {
@@ -202,7 +201,8 @@ describe('MeasureMagnifier', () => {
 			volumes: [],
 		}
 		viewer.renderer.domElement.style = {backgroundColor: '#494946'}
-		viewer.pRenderer = {render: vi.fn()}
+		const effectRenderer = {render: vi.fn()}
+		viewer.getPRenderer = vi.fn(() => effectRenderer)
 		Object.assign(viewer.renderer, {
 			autoClear: false,
 			clear: vi.fn(() => {
@@ -238,12 +238,13 @@ describe('MeasureMagnifier', () => {
 
 		magnifier._renderToTarget(camera)
 
-		expect(viewer.pRenderer.render).toHaveBeenCalledWith(
-			viewer.scene.scenePointCloud,
+		expect(viewer.getPRenderer).toHaveBeenCalledOnce()
+		expect(effectRenderer.render).toHaveBeenCalledWith({
 			camera,
-			magnifier._renderTarget,
-			expect.any(Object)
-		)
+			offscreen: true,
+			skipBackground: true,
+			target: magnifier._renderTarget,
+		})
 		expect(viewer.renderer.clearDepth).toHaveBeenCalledOnce()
 		expect(viewer.renderer.render).toHaveBeenCalledWith(viewer.measuringTool.scene, camera)
 		expect(overlayAutoClear).toBe(false)
@@ -305,21 +306,19 @@ describe('MeasureMagnifier', () => {
 
 		magnifier.start()
 		expect(viewer._domListeners.has('mousemove')).toBe(true)
-		expect(viewer._viewerListeners.has('update')).toBe(true)
 		expect(viewer._viewerListeners.has('render.pass.end')).toBe(true)
 
 		magnifier.stop()
 		expect(viewer._domListeners.has('mousemove')).toBe(false)
-		expect(viewer._viewerListeners.has('update')).toBe(false)
 		expect(viewer._viewerListeners.has('render.pass.end')).toBe(false)
 
 		magnifier.destroy()
 	})
 
-	it('uses fixed point sizes while active and restores every material mode', () => {
+	it('does not mutate shared point-cloud material point-size modes', () => {
 		const viewer = createViewer()
-		const adaptiveMaterial = {pointSizeType: PointSizeType.ADAPTIVE}
-		const fixedMaterial = {pointSizeType: PointSizeType.FIXED}
+		const adaptiveMaterial = {pointSizeType: 2}
+		const fixedMaterial = {pointSizeType: 0}
 		viewer.scene.pointclouds.push(
 			{material: adaptiveMaterial},
 			{material: fixedMaterial},
@@ -328,25 +327,10 @@ describe('MeasureMagnifier', () => {
 
 		magnifier.start()
 
-		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.FIXED)
-		expect(fixedMaterial.pointSizeType).toBe(PointSizeType.FIXED)
-
-		// Synchronize point clouds loaded after the magnifier has started.
-		const lateMaterial = {pointSizeType: PointSizeType.ADAPTIVE}
-		viewer.scene.pointclouds.push({material: lateMaterial})
-		viewer._viewerListeners.get('update')()
-		expect(lateMaterial.pointSizeType).toBe(PointSizeType.FIXED)
-
-		// Preserve a point-size mode selected while magnification is active.
-		adaptiveMaterial.pointSizeType = PointSizeType.ATTENUATED
-		viewer._viewerListeners.get('update')()
-		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.FIXED)
-
 		magnifier.stop()
 
-		expect(adaptiveMaterial.pointSizeType).toBe(PointSizeType.ATTENUATED)
-		expect(fixedMaterial.pointSizeType).toBe(PointSizeType.FIXED)
-		expect(lateMaterial.pointSizeType).toBe(PointSizeType.ADAPTIVE)
+		expect(adaptiveMaterial.pointSizeType).toBe(2)
+		expect(fixedMaterial.pointSizeType).toBe(0)
 
 		magnifier.destroy()
 	})

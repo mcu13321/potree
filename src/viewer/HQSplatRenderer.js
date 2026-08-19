@@ -185,16 +185,17 @@ export class HQSplatRenderer{
 		});
 	}
 
-	_renderBackground(){
+	_renderBackground(target = null, camera = null){
 		const viewer = this.viewer;
 
-		viewer.renderer.setRenderTarget(null);
+		viewer.renderer.setRenderTarget(target);
 		if(viewer.background === "skybox"){
 			viewer.renderer.setClearColor(0x000000, 0);
 			viewer.renderer.clear();
-			viewer.skybox.camera.rotation.copy(viewer.scene.cameraP.rotation);
-			viewer.skybox.camera.fov = viewer.scene.cameraP.fov;
-			viewer.skybox.camera.aspect = viewer.scene.cameraP.aspect;
+			const sourceCamera = camera || viewer.scene.cameraP;
+			viewer.skybox.camera.rotation.copy(sourceCamera.rotation);
+			viewer.skybox.camera.fov = sourceCamera.fov;
+			viewer.skybox.camera.aspect = sourceCamera.aspect;
 			viewer.skybox.parent.rotation.x = 0;
 			viewer.skybox.parent.updateMatrixWorld();
 			viewer.skybox.camera.updateProjectionMatrix();
@@ -215,7 +216,7 @@ export class HQSplatRenderer{
 		}
 	}
 
-	_renderNormalizationPass({rtDepth, rtAttribute, width, height, useEDL}){
+	_renderNormalizationPass({rtDepth, rtAttribute, width, height, useEDL, target = null}){
 		const material = useEDL ? this.normalizationEDLMaterial : this.normalizationMaterial;
 
 		if(useEDL){
@@ -228,7 +229,11 @@ export class HQSplatRenderer{
 
 		material.uniforms.uWeightMap.value = rtAttribute.texture;
 		material.uniforms.uDepthMap.value = rtAttribute.depthTexture;
-		Utils.screenPass.render(this.viewer.renderer, material);
+		if (target) {
+			Utils.screenPass.render(this.viewer.renderer, material, target);
+		} else {
+			Utils.screenPass.render(this.viewer.renderer, material);
+		}
 	}
 
 	_pruneMaterialCaches(pointclouds){
@@ -241,8 +246,17 @@ export class HQSplatRenderer{
 	render(params = {}){
 		this.init();
 		const viewer = this.viewer;
+		// Offscreen rendering shares HQ, EDL, and XRAY passes without viewer overlays.
 		const camera = params.camera || viewer.scene.getActiveCamera();
-		const {width, height} = viewer.renderer.getSize(new THREE.Vector2());
+		const target = params.target || null;
+		const offscreen = params.offscreen === true;
+		const skipBackground = params.skipBackground === true;
+		const size = viewer.renderer.getSize(new THREE.Vector2());
+		const width = target?.width || size.x;
+		const height = target?.height || size.y;
+		if (target) {
+			viewer.renderer.setRenderTarget(target);
+		}
 		const allPointclouds = viewer.scene.pointclouds;
 		const visiblePointclouds = allPointclouds.filter(pointcloud => pointcloud.visible);
 		const {edlPointclouds, regularPointclouds} = partitionPointcloudsByEDL(
@@ -259,7 +273,9 @@ export class HQSplatRenderer{
 		const activeTargets = [];
 		const targetSpecs = [];
 
-		viewer.dispatchEvent({type: "render.pass.begin", viewer});
+		if (!offscreen) {
+			viewer.dispatchEvent({type: "render.pass.begin", viewer});
+		}
 		this._pruneMaterialCaches(allPointclouds);
 
 		if(standardPointclouds.length > 0){
@@ -323,7 +339,11 @@ export class HQSplatRenderer{
 			}
 		}
 
-		this._renderBackground();
+		if (!skipBackground) {
+			this._renderBackground(target, camera);
+		} else {
+			viewer.renderer.setRenderTarget(target);
+		}
 		if(standardPointclouds.length > 0){
 			this._renderNormalizationPass({
 				rtDepth: this.rtDepth,
@@ -331,10 +351,15 @@ export class HQSplatRenderer{
 				width,
 				height,
 				useEDL: false,
+				target,
 			});
 		}
 		if(xrayPointclouds.length > 0){
-			this.xrayPipeline.resolve(viewer.getXrayRenderSettings());
+			if (target) {
+				this.xrayPipeline.resolve(viewer.getXrayRenderSettings(), target);
+			} else {
+				this.xrayPipeline.resolve(viewer.getXrayRenderSettings());
+			}
 		}
 		if(edlPointclouds.length > 0){
 			this._renderNormalizationPass({
@@ -343,10 +368,15 @@ export class HQSplatRenderer{
 				width,
 				height,
 				useEDL: true,
+				target,
 			});
 		}
 
+		viewer.renderer.setRenderTarget(target);
 		viewer.renderer.render(viewer.scene.scene, camera);
+		if (offscreen) {
+			return;
+		}
 		viewer.dispatchEvent({type: "render.pass.scene", viewer});
 		viewer.renderer.clearDepth();
 		viewer.transformationTool.update();
