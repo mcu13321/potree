@@ -1,6 +1,6 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {readFileSync} from "node:fs";
-import {afterEach, describe, expect, it} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {EventDispatcher} from "../src/EventDispatcher.js";
 import {DefectMarkerTool} from "../src/utils/DefectMarkerTool.js";
 
@@ -17,7 +17,7 @@ class MockViewer extends EventDispatcher {
 	constructor() {
 		super();
 		this.renderArea = document.createElement("div");
-		this.renderer = {domElement: document.createElement("canvas")};
+		this.renderer = {domElement: document.createElement("canvas"), render: vi.fn()};
 		this.scene = {getActiveCamera: () => this.camera};
 		this.camera = createCamera();
 
@@ -47,7 +47,7 @@ describe("DefectMarkerTool", () => {
 		document.body.innerHTML = "";
 	});
 
-	it("creates Potree-owned HTML markers with a label above a circular pin", () => {
+	it("creates Potree-owned text labels and XY-plane rings at anomaly ground positions", () => {
 		const viewer = new MockViewer();
 		tool = new DefectMarkerTool(viewer);
 		tool.setData([{
@@ -63,7 +63,7 @@ describe("DefectMarkerTool", () => {
 		const marker = viewer.renderArea.querySelector('[data-defect-marker-id="A1"]');
 		expect(marker).not.toBeNull();
 		expect(marker.children[0].className).toBe("potree-defect-marker__label");
-		expect(marker.children[1].className).toBe("potree-defect-marker__pin");
+		expect(marker.children).toHaveLength(1);
 		expect(marker.textContent).toBe("A1");
 		expect(marker.style.getPropertyValue("--potree-defect-marker-accent")).toBe("#2E82FF");
 		expect(marker.style.getPropertyValue("--potree-defect-marker-accent-dark")).toBe("#7DC0FF");
@@ -72,9 +72,25 @@ describe("DefectMarkerTool", () => {
 		expect(marker.style.display).toBe("flex");
 
 		const styles = document.getElementById("potree-defect-marker-styles").textContent;
-		expect(styles).toContain("border: 1px solid rgba(255, 255, 255, 0.2)");
-		expect(styles).toContain("border-color: rgba(255, 255, 255, 0.2)");
+		expect(styles).not.toContain("border: 1px solid rgba(255, 255, 255, 0.2)");
+		expect(styles).not.toContain("background: #ffffff");
+		expect(styles).toContain("transform: translate(-50%, -50%)");
+		expect(styles).toContain("color: #ffffff");
 		expect(styles).toContain("cursor: pointer");
+		expect(marker.style.fontSize).toBe("12px");
+
+		const ring = tool.markers.get("A1").ring;
+		expect(ring.position.toArray()).toEqual([0, 0, 0]);
+		expect(ring.geometry.type).toBe("RingGeometry");
+		expect(ring.geometry.parameters.thetaSegments).toBe(32);
+		expect(ring.material.transparent).toBe(true);
+		expect(ring.material.opacity).toBe(0.8);
+		expect(ring.material.depthTest).toBe(false);
+		expect(ring.material.depthWrite).toBe(false);
+		expect(ring.material.color.getStyle()).toBe("rgb(46,130,255)");
+
+		viewer.dispatchEvent({type: "render.pass.perspective_overlay"});
+		expect(viewer.renderer.render).toHaveBeenCalledWith(tool.scene, viewer.camera);
 	});
 
 	it("keeps one active marker and dispatches the same selection for label clicks", () => {
@@ -88,6 +104,7 @@ describe("DefectMarkerTool", () => {
 			{id: "A1", label: "A1", position: [0, 0, 0]},
 			{id: "A2", label: "A2", position: [1, 0, 0]},
 		]);
+		tool.setVisible(true);
 
 		tool.setActiveMarker("A1");
 		expect(tool.markers.get("A1").element.classList).toContain("potree-defect-marker--active");
@@ -100,29 +117,40 @@ describe("DefectMarkerTool", () => {
 		expect(selectedMarkerIds).toEqual(["A2"]);
 
 		const styles = document.getElementById("potree-defect-marker-styles").textContent;
-		expect(styles).toContain(".potree-defect-marker--active");
-		expect(styles).toContain("0 0 0 6px rgba(255, 255, 255, 0.18)");
-		expect(styles).toContain("0 0 0 11px rgba(255, 255, 255, 0.09)");
-		expect(styles).not.toContain(".potree-defect-marker__pin::before");
-		expect(styles).not.toContain(".potree-defect-marker__pin::after");
-		expect(styles).toContain(".potree-defect-marker__label::after");
-		expect(styles).toContain("background: rgba(0, 0, 0, 0.2)");
-		expect(styles).toContain(".potree-defect-marker--active .potree-defect-marker__label::after");
+		expect(styles).toContain("cursor: pointer");
+		expect(styles).not.toContain("potree-defect-marker__pin");
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.8);
+		expect(tool.markers.get("A2").ring.material.opacity).toBe(1);
+
+		tool.markers.get("A1").element.dispatchEvent(new MouseEvent("mouseenter"));
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.9);
+		tool.markers.get("A1").element.dispatchEvent(new MouseEvent("mouseleave"));
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.8);
+
+		viewer.renderer.domElement.dispatchEvent(new MouseEvent("pointermove", {clientX: 419, clientY: 320}));
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.9);
+		viewer.renderer.domElement.dispatchEvent(new MouseEvent("pointerleave"));
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.8);
 	});
 
-	it("focuses the live camera controls on the selected marker position", () => {
+	it("focuses the live camera controls on the selected marker camera position", () => {
 		const viewer = new MockViewer();
 		const focusCalls = [];
 		viewer.fjdCameraControls = {
 			fitToSphere: (sphere, animate) => focusCalls.push({sphere, animate}),
 		};
 		tool = new DefectMarkerTool(viewer);
-		tool.setData([{id: "A1", label: "A1", position: [1, 2, 3]}]);
+		tool.setData([{
+			id: "A1",
+			label: "A1",
+			position: [1, 2, 3],
+			cameraPosition: [4, 5, 6],
+		}]);
 
 		tool.focusMarker("A1");
 
 		expect(focusCalls).toHaveLength(1);
-		expect(focusCalls[0].sphere.center.toArray()).toEqual([1, 2, 3]);
+		expect(focusCalls[0].sphere.center.toArray()).toEqual([4, 5, 6]);
 		expect(focusCalls[0].sphere.radius).toBe(2);
 		expect(focusCalls[0].animate).toBe(true);
 	});
@@ -149,6 +177,8 @@ describe("DefectMarkerTool", () => {
 		expect(originalElement.textContent).toBe("Updated");
 		expect(originalElement.style.getPropertyValue("--potree-defect-marker-accent")).toBe("#BE123C");
 		expect(originalElement.style.getPropertyValue("--potree-defect-marker-accent-dark")).toBe("#F1B1B1");
+		expect(tool.markers.get("A1").ring.position.toArray()).toEqual([1, 0, 0]);
+		expect(tool.markers.get("A1").ring.material.color.getStyle()).toBe("rgb(190,18,60)");
 
 		tool.setData([{id: "A2", label: "Second", position: [0, 0, 0]}]);
 		expect(tool.markers.has("A1")).toBe(false);
