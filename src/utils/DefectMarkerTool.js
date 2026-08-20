@@ -198,11 +198,16 @@ export class DefectMarkerTool extends EventDispatcher {
 		this._onUpdate = () => this.update();
 		this._onRender = () => this.render();
 		this._onPointerMove = (event) => this._updateRingHover(event);
-		this._onPointerLeave = () => this._setHoveredMarkerId(null);
+		this._onPointerLeave = () => {
+			this._setHoveredMarkerId(null);
+			this._setCanvasCursor("");
+		};
+		this._onPointerUp = (event) => this._selectRingAtPointer(event);
 		viewer.addEventListener("update", this._onUpdate);
 		viewer.addEventListener("render.pass.perspective_overlay", this._onRender);
 		this.viewer?.renderer?.domElement?.addEventListener("pointermove", this._onPointerMove);
 		this.viewer?.renderer?.domElement?.addEventListener("pointerleave", this._onPointerLeave);
+		this.viewer?.renderer?.domElement?.addEventListener("pointerup", this._onPointerUp);
 	}
 
 	_resolveHostElement() {
@@ -284,6 +289,39 @@ export class DefectMarkerTool extends EventDispatcher {
 	}
 
 	_updateRingHover(event) {
+		if (!this.visible || !this.ringGroup?.visible || !this.markers.size) {
+			this._setCanvasCursor("");
+			return;
+		}
+		const canvas = this.viewer?.renderer?.domElement;
+		const camera = this.viewer?.scene?.getActiveCamera?.();
+		if (!canvas || !camera) {
+			this._setCanvasCursor("");
+			return;
+		}
+
+		const canvasRect = canvas.getBoundingClientRect();
+		if (!canvasRect.width || !canvasRect.height) {
+			this._setCanvasCursor("");
+			return;
+		}
+		_pointer.set(
+			((event.clientX - canvasRect.left) / canvasRect.width) * 2 - 1,
+			-((event.clientY - canvasRect.top) / canvasRect.height) * 2 + 1
+		);
+		this.ringGroup.updateMatrixWorld(true);
+		_raycaster.setFromCamera(_pointer, camera);
+		const ring = _raycaster.intersectObjects(this.ringGroup.children, false)[0]?.object;
+		this._setCanvasCursor(ring ? "pointer" : "");
+		this._setHoveredMarkerId(ring?.userData?.defectMarkerId ?? null);
+	}
+
+	_setCanvasCursor(cursor) {
+		const canvas = this.viewer?.renderer?.domElement;
+		if (canvas) canvas.style.cursor = cursor;
+	}
+
+	_selectRingAtPointer(event) {
 		if (!this.visible || !this.ringGroup?.visible || !this.markers.size) return;
 		const canvas = this.viewer?.renderer?.domElement;
 		const camera = this.viewer?.scene?.getActiveCamera?.();
@@ -298,7 +336,15 @@ export class DefectMarkerTool extends EventDispatcher {
 		this.ringGroup.updateMatrixWorld(true);
 		_raycaster.setFromCamera(_pointer, camera);
 		const ring = _raycaster.intersectObjects(this.ringGroup.children, false)[0]?.object;
-		this._setHoveredMarkerId(ring?.userData?.defectMarkerId ?? null);
+		const markerId = ring?.userData?.defectMarkerId;
+		if (markerId == null) return;
+
+		this.setActiveMarker(markerId);
+		this.viewer?.dispatchEvent({
+			type: "defect_marker_selected",
+			markerId: String(markerId),
+			marker: this.markers.get(String(markerId))?.marker,
+		});
 	}
 
 	_removeMarker(id) {
@@ -457,6 +503,8 @@ export class DefectMarkerTool extends EventDispatcher {
 		this.viewer?.removeEventListener("render.pass.perspective_overlay", this._onRender);
 		this.viewer?.renderer?.domElement?.removeEventListener("pointermove", this._onPointerMove);
 		this.viewer?.renderer?.domElement?.removeEventListener("pointerleave", this._onPointerLeave);
+		this.viewer?.renderer?.domElement?.removeEventListener("pointerup", this._onPointerUp);
+		this._setCanvasCursor("");
 		this.clear();
 		this.scene?.remove(this.ringGroup);
 		this.rootElement?.remove();

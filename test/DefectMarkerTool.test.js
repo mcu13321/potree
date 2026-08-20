@@ -129,8 +129,13 @@ describe("DefectMarkerTool", () => {
 
 		viewer.renderer.domElement.dispatchEvent(new MouseEvent("pointermove", {clientX: 419, clientY: 320}));
 		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.9);
+		expect(viewer.renderer.domElement.style.cursor).toBe("pointer");
+		viewer.renderer.domElement.dispatchEvent(new MouseEvent("pointerup", {clientX: 419, clientY: 320}));
+		expect(tool.activeMarkerId).toBe("A1");
+		expect(selectedMarkerIds).toEqual(["A2", "A1"]);
 		viewer.renderer.domElement.dispatchEvent(new MouseEvent("pointerleave"));
-		expect(tool.markers.get("A1").ring.material.opacity).toBe(0.8);
+		expect(tool.markers.get("A1").ring.material.opacity).toBe(1);
+		expect(viewer.renderer.domElement.style.cursor).toBe("");
 	});
 
 	it("focuses the live camera controls on the selected marker camera position", () => {
