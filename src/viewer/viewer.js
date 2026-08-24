@@ -2875,7 +2875,8 @@ export class Viewer extends EventDispatcher{
 	}
 
 	loop(timestamp){
-		if (this.pauseRender && isGroupPointcloudSource(this)) {
+		// Pause rendering for every Potree source when the host stage is hidden.
+		if (this.pauseRender) {
 			return;
 		}
 
