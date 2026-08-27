@@ -897,11 +897,17 @@ void main() {
 
 
 	#if defined hq_depth_pass
-		float originalDepth = gl_Position.w;
-		float adjustedDepth = originalDepth + 2.0 * vRadius;
-		float adjust = adjustedDepth / originalDepth;
+		if(uUseOrthographicCamera){
+			// Preserve orthographic screen coordinates by expanding depth only along the view-space z axis.
+			float orthoRadius = pointSize * uOrthoWidth / max(uScreenWidth, 1.0);
+			mvPosition.z -= 2.0 * orthoRadius;
+		}else{
+			float originalDepth = gl_Position.w;
+			float adjustedDepth = originalDepth + 2.0 * vRadius;
+			float adjust = adjustedDepth / originalDepth;
 
-		mvPosition.xyz = mvPosition.xyz * adjust;
+			mvPosition.xyz = mvPosition.xyz * adjust;
+		}
 		gl_Position = projectionMatrix * mvPosition;
 	#endif
 

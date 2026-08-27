@@ -160,6 +160,16 @@ describe("XraySplatPipeline", () => {
 		expect(Shaders["normalize_xray.fs"]).toContain("uFrontDetailStrength");
 	});
 
+	it("keeps orthographic HQ depth expansion on the view-space z axis", () => {
+		const shader = Shaders["pointcloud.vs"];
+
+		expect(shader).toContain(
+			"float orthoRadius = pointSize * uOrthoWidth / max(uScreenWidth, 1.0)"
+		);
+		expect(shader).toContain("mvPosition.z -= 2.0 * orthoRadius");
+		expect(shader).toContain("mvPosition.xyz = mvPosition.xyz * adjust");
+	});
+
 	it("detects the required WebGL1 and WebGL2 capabilities", () => {
 		const webgl1 = {
 			capabilities: {isWebGL2: false},
