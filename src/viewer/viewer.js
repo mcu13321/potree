@@ -1316,8 +1316,14 @@ export class Viewer extends EventDispatcher{
 		const visiblePointclouds = this.scene.pointclouds.filter(
 			(pc) => pc.visible !== false
 		);
+		// Keep every automatic top-view fit scoped to the preview's axis-owned main cloud.
+		const previewPointclouds = this.crossSectionPreviewTool?.getPreviewPointclouds?.() ?? [];
 		const pointcloudsForBox =
-			visiblePointclouds.length > 0 ? visiblePointclouds : this.scene.pointclouds;
+			previewPointclouds.length > 0
+				? previewPointclouds
+				: visiblePointclouds.length > 0
+					? visiblePointclouds
+					: this.scene.pointclouds;
 		let box = this.getBoundingBox(pointcloudsForBox );
 		if (activeControls?.camera?.isPerspectiveCamera) {
 			activeControls.camera.zoom = 1;

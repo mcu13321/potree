@@ -18,6 +18,13 @@ function toFiniteNumber(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+// Normalize host-provided resource keys before exact point-cloud matching.
+function normalizePointCloudBaseUrl(value) {
+	return typeof value === "string"
+		? value.trim().replace(/\\/g, "/").replace(/\/+$/, "")
+		: "";
+}
+
 function isUsableVector(value) {
 	return value?.isVector3 && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
 }
@@ -345,6 +352,7 @@ export class CrossSectionPreviewTool {
 		const preview = {
 			activeIndex: Math.max(0, Math.trunc(toFiniteNumber(config.activeIndex) ?? 0)),
 			axisUuid: config.axisUuid ?? null,
+			mainPointCloudBaseUrl: normalizePointCloudBaseUrl(config.mainPointCloudBaseUrl),
 			sectionEnd: toFiniteNumber(config.sectionEnd),
 			sectionStart: toFiniteNumber(config.sectionStart),
 			sectionStep: toFiniteNumber(config.sectionStep),
@@ -352,6 +360,7 @@ export class CrossSectionPreviewTool {
 		};
 		const shapeKey = JSON.stringify({
 			axisUuid: preview.axisUuid,
+			mainPointCloudBaseUrl: preview.mainPointCloudBaseUrl,
 			sectionEnd: preview.sectionEnd,
 			sectionStart: preview.sectionStart,
 			sectionStep: preview.sectionStep,
@@ -380,19 +389,26 @@ export class CrossSectionPreviewTool {
 
 	getAxisMeasurement() {
 		const measurements = this.viewer.scene?.measurements ?? [];
-		if (this.preview?.axisUuid) {
-			return measurements.find((measurement) => measurement.uuid === this.preview.axisUuid) ?? null;
+		if (!this.preview?.axisUuid) {
+			return null;
 		}
-		return measurements.find((measurement) => measurement?.isCadVector && measurement.vectorType === "axisLine") ?? null;
+		return measurements.find((measurement) => measurement.uuid === this.preview.axisUuid) ?? null;
 	}
 
-	getVisiblePointclouds() {
-		return (this.viewer.scene?.pointclouds ?? []).filter(
-			(pointcloud) => pointcloud?.visible !== false,
+	// Select one exact axis-owned point cloud so unrelated scene data cannot affect preview geometry.
+	getPreviewPointclouds() {
+		const targetBaseUrl = this.preview?.mainPointCloudBaseUrl;
+		if (!targetBaseUrl) {
+			return [];
+		}
+		const pointcloud = (this.viewer.scene?.pointclouds ?? []).find(
+			(candidate) => candidate?.visible !== false
+				&& normalizePointCloudBaseUrl(candidate?.baseUrl) === targetBaseUrl,
 		);
+		return pointcloud ? [pointcloud] : [];
 	}
 
-	getPointCloudBounds(pointclouds = this.getVisiblePointclouds()) {
+	getPointCloudBounds(pointclouds = this.getPreviewPointclouds()) {
 		if (pointclouds.length === 0) {
 			return null;
 		}
@@ -540,7 +556,7 @@ export class CrossSectionPreviewTool {
 		const axis = this.getAxisMeasurement();
 		this.setPreviewAxisColor(axis);
 		const axisPaths = collectAxisPaths(axis);
-		const pointclouds = this.getVisiblePointclouds();
+		const pointclouds = this.getPreviewPointclouds();
 		const pointCloudBounds = this.getPointCloudBounds(pointclouds);
 		const frames = buildCrossSectionPreviewFrames({
 			axisPaths,
@@ -555,9 +571,7 @@ export class CrossSectionPreviewTool {
 			return;
 		}
 		this.requestFrameSideLength(frames, pointclouds, pointCloudBounds);
-		if (!this.envelopeResolved) {
-			return;
-		}
+		// Render the main-cloud bounds fallback immediately while the local envelope refines asynchronously.
 
 		const normalPositions = [];
 		const activeFrame = frames[this.preview.activeIndex] ?? null;
@@ -609,9 +623,8 @@ export class CrossSectionPreviewTool {
 				: null;
 		if (controls) {
 			controls.fitToBox(bounds, false);
-			return;
 		}
-		this.viewer.fitToScreen?.();
+		// Never fall back to the global scene fit because unrelated point clouds may be visible.
 	}
 
 	update() {
