@@ -354,6 +354,11 @@ export class EDLRenderer{
 			projArray.set(proj.elements);
 
 			uniforms.uNear.value = camera.near;
+			// Use the actual render camera, including offscreen camera overrides.
+			uniforms.uUseOrthographicCamera.value = camera.isOrthographicCamera === true;
+			uniforms.uOrthographicHeight.value = camera.isOrthographicCamera
+				? Math.max(Math.abs(camera.top - camera.bottom) / camera.zoom, 0.000001)
+				: 1;
 			uniforms.uFar.value = camera.far;
 			uniforms.uEDLColor.value = this.rtEDL.texture;
 			uniforms.uEDLDepth.value = this.rtEDL.depthTexture;

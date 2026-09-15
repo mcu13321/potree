@@ -7,7 +7,7 @@
 // https://github.com/cloudcompare/trunk/tree/master/plugins/qEDL/shaders/EDL
 //
 
-precision mediump float;
+precision highp float;
 precision mediump int;
 
 uniform float screenWidth;
@@ -16,6 +16,9 @@ uniform vec2 neighbours[NEIGHBOUR_COUNT];
 uniform float edlStrength;
 uniform float radius;
 uniform float opacity;
+// Normalize signed depth differences by the visible orthographic world-space height.
+uniform bool uUseOrthographicCamera;
+uniform float uOrthographicHeight;
 
 uniform float uNear;
 uniform float uFar;
@@ -25,7 +28,7 @@ uniform mat4 uProj;
 uniform sampler2D uEDLColor;
 uniform sampler2D uEDLDepth;
 
-varying vec2 vUv;
+varying mediump vec2 vUv;
 
 float response(float depth){
 	vec2 uvRadius = radius / vec2(screenWidth, screenHeight);
@@ -36,6 +39,13 @@ float response(float depth){
 		vec2 uvNeighbor = vUv + uvRadius * neighbours[i];
 		
 		float neighbourDepth = texture2D(uEDLColor, uvNeighbor).a;
+		if(uUseOrthographicCamera){
+			// Depth-buffer coverage is independent of valid signed EDL values, including zero.
+			if(texture2D(uEDLDepth, uvNeighbor).r < 1.0){
+				sum += max(0.0, (depth - neighbourDepth) / uOrthographicHeight);
+			}
+			continue;
+		}
 		neighbourDepth = (neighbourDepth == 1.0) ? 0.0 : neighbourDepth;
 
 		if(neighbourDepth != 0.0){
@@ -54,14 +64,22 @@ void main(){
 	vec4 cEDL = texture2D(uEDLColor, vUv);
 	
 	float depth = cEDL.a;
-	depth = (depth == 1.0) ? 0.0 : depth;
+	// Preserve the legacy perspective sentinel while using actual coverage for orthographic views.
+	if(uUseOrthographicCamera){
+		if(texture2D(uEDLDepth, vUv).r >= 1.0){
+			discard;
+		}
+	}else{
+		depth = (depth == 1.0) ? 0.0 : depth;
+	}
 	float res = response(depth);
 	float shade = exp(-res * 300.0 * edlStrength);
 
 	gl_FragColor = vec4(cEDL.rgb * shade, opacity);
 
 	{ // write regular hyperbolic depth values to depth buffer
-		float dl = pow(2.0, depth);
+		// Decode the projection-specific EDL payload before projecting depth.
+		float dl = uUseOrthographicCamera ? depth : pow(2.0, depth);
 
 		vec4 dp = uProj * vec4(0.0, 0.0, -dl, 1.0);
 		float pz = dp.z / dp.w;
@@ -70,7 +88,7 @@ void main(){
 		// gl_FragDepthEXT = fragDepth;
 	}
 
-	if(depth == 0.0){
+	if(!uUseOrthographicCamera && depth == 0.0){
 		discard;
 	}
 

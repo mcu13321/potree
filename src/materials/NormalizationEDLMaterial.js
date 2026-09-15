@@ -9,6 +9,9 @@ export class NormalizationEDLMaterial extends THREE.RawShaderMaterial{
 		super();
 
 		let uniforms = {
+			// Keep HQ EDL on the same projection contract as the standard pass.
+			uUseOrthographicCamera: { value: false },
+			uOrthographicHeight: { value: 1.0 },
 			screenWidth:    { type: 'f',   value: 0 },
 			screenHeight:   { type: 'f',   value: 0 },
 			edlStrength:    { type: 'f',   value: 1.0 },

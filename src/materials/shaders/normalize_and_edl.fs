@@ -7,7 +7,7 @@
 // https://github.com/cloudcompare/trunk/tree/master/plugins/qEDL/shaders/EDL
 //
 
-precision mediump float;
+precision highp float;
 precision mediump int;
 
 uniform sampler2D uWeightMap;
@@ -19,8 +19,11 @@ uniform float screenHeight;
 uniform vec2 neighbours[NEIGHBOUR_COUNT];
 uniform float edlStrength;
 uniform float radius;
+// Match the standard EDL pass for signed orthographic depth and scale.
+uniform bool uUseOrthographicCamera;
+uniform float uOrthographicHeight;
 
-varying vec2 vUv;
+varying mediump vec2 vUv;
 
 float response(float depth){
 	vec2 uvRadius = radius / vec2(screenWidth, screenHeight);
@@ -31,6 +34,13 @@ float response(float depth){
 		vec2 uvNeighbor = vUv + uvRadius * neighbours[i];
 		
 		float neighbourDepth = texture2D(uEDLMap, uvNeighbor).a;
+		if(uUseOrthographicCamera){
+			// The shared depth attachment identifies samples even when their EDL depth is zero.
+			if(texture2D(uDepthMap, uvNeighbor).r < 1.0){
+				sum += max(0.0, (depth - neighbourDepth) / uOrthographicHeight);
+			}
+			continue;
+		}
 
 		if(neighbourDepth != 0.0){
 			if(depth == 0.0){
@@ -45,6 +55,10 @@ float response(float depth){
 }
 
 void main() {
+	// Avoid normalizing empty pixels; signed EDL values cannot serve as background markers.
+	if(uUseOrthographicCamera && texture2D(uDepthMap, vUv).r >= 1.0){
+		discard;
+	}
 
 	float edlDepth = texture2D(uEDLMap, vUv).a;
 	float res = response(edlDepth);

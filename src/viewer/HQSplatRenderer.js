@@ -216,10 +216,15 @@ export class HQSplatRenderer{
 		}
 	}
 
-	_renderNormalizationPass({rtDepth, rtAttribute, width, height, useEDL, target = null}){
+	// Pass the render camera explicitly so offscreen EDL uses the correct projection and zoom.
+	_renderNormalizationPass({rtDepth, rtAttribute, width, height, useEDL, camera, target = null}){
 		const material = useEDL ? this.normalizationEDLMaterial : this.normalizationMaterial;
 
 		if(useEDL){
+			material.uniforms.uUseOrthographicCamera.value = camera.isOrthographicCamera === true;
+			material.uniforms.uOrthographicHeight.value = camera.isOrthographicCamera
+				? Math.max(Math.abs(camera.top - camera.bottom) / camera.zoom, 0.000001)
+				: 1;
 			material.uniforms.edlStrength.value = this.viewer.edlStrength;
 			material.uniforms.radius.value = this.viewer.edlRadius;
 			material.uniforms.screenWidth.value = width;
@@ -351,6 +356,8 @@ export class HQSplatRenderer{
 				width,
 				height,
 				useEDL: false,
+				// Keep both normalization paths tied to this render invocation.
+				camera,
 				target,
 			});
 		}
@@ -368,6 +375,8 @@ export class HQSplatRenderer{
 				width,
 				height,
 				useEDL: true,
+				// The EDL scale must follow this camera rather than the viewer's active camera.
+				camera,
 				target,
 			});
 		}

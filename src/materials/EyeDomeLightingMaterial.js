@@ -17,6 +17,9 @@ export class EyeDomeLightingMaterial extends THREE.RawShaderMaterial{
 		super();
 
 		let uniforms = {
+			// Orthographic EDL uses signed depth normalized by the visible world-space height.
+			uUseOrthographicCamera: { value: false },
+			uOrthographicHeight: { value: 1.0 },
 			screenWidth:    { type: 'f', 	value: 0 },
 			screenHeight:   { type: 'f', 	value: 0 },
 			edlStrength:    { type: 'f', 	value: 1.0 },

@@ -6,6 +6,7 @@ import { EDLRenderer } from "../src/viewer/EDLRenderer.js";
 import { HQSplatRenderer } from "../src/viewer/HQSplatRenderer.js";
 import { PotreeRenderer as ViewerPotreeRenderer } from "../src/viewer/PotreeRenderer.js";
 import { Utils } from "../src/utils.js";
+import { NormalizationEDLMaterial } from "../src/materials/NormalizationEDLMaterial.js";
 
 function createRendererMock() {
 	return {
@@ -159,6 +160,9 @@ describe("Render effect routing", () => {
 					uFar: { value: 0 },
 					uEDLColor: { value: null },
 					uEDLDepth: { value: null },
+					// Mirror the projection contract used by the real EDL material.
+					uUseOrthographicCamera: { value: false },
+					uOrthographicHeight: { value: 1 },
 					uProj: { value: null },
 					edlStrength: { value: 0 },
 					radius: { value: 0 },
@@ -183,6 +187,31 @@ describe("Render effect routing", () => {
 
 		expect(renderer._renderRegularPointclouds).toHaveBeenCalledWith([pc2], expect.anything(), true);
 		expect(renderer._renderEDLPointclouds).toHaveBeenCalledWith([pc1], expect.anything(), 800, 600, []);
+		// An offscreen orthographic camera must override the active perspective camera.
+		const camera = new THREE.OrthographicCamera(-10, 10, 8, -8, -100, 100);
+		camera.zoom = 2;
+		renderer.render({ camera, offscreen: true });
+		expect(renderer.edlMaterial.uniforms.uUseOrthographicCamera.value).toBe(true);
+		expect(renderer.edlMaterial.uniforms.uOrthographicHeight.value).toBe(8);
+		renderer.render({ camera: createCamera(), offscreen: true });
+		expect(renderer.edlMaterial.uniforms.uUseOrthographicCamera.value).toBe(false);
+	});
+
+	// Exercise actual HQ uniforms rather than a mocked normalization pass.
+	it("HQ EDL follows the supplied camera and zoom across projection switches", () => {
+		const renderer = new HQSplatRenderer(createViewerForEffectRender([]));
+		renderer.normalizationEDLMaterial = new NormalizationEDLMaterial();
+		vi.spyOn(Utils.screenPass, "render").mockImplementation(() => {});
+		const camera = new THREE.OrthographicCamera(-10, 10, 8, -8, -100, 100);
+		camera.zoom = 4;
+		const params = {rtDepth: {texture: {}}, rtAttribute: {texture: {}, depthTexture: {}}, width: 800, height: 600, useEDL: true, camera};
+		renderer._renderNormalizationPass(params);
+		const uniforms = renderer.normalizationEDLMaterial.uniforms;
+		expect(uniforms.uUseOrthographicCamera.value).toBe(true);
+		expect(uniforms.uOrthographicHeight.value).toBe(4);
+		renderer._renderNormalizationPass({...params, camera: createCamera()});
+		expect(uniforms.uUseOrthographicCamera.value).toBe(false);
+		expect(uniforms.uOrthographicHeight.value).toBe(1);
 	});
 
 	it("HQ 渲染器应编排普通、XRAY 和 EDL 独立 pass", () => {
@@ -244,6 +273,8 @@ describe("Render effect routing", () => {
 		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(2);
 		expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
 		expect(renderer._renderNormalizationPass.mock.calls[1][0].useEDL).toBe(true);
+		// Normalization must receive the same camera used by its depth pass.
+		expect(renderer._renderNormalizationPass.mock.calls[1][0].camera).toBe(renderer._renderPointcloudGroup.mock.calls[1][0].camera);
 	});
 
 	it("标准渲染器应为多点云 XRAY 写入动态透明度", () => {

@@ -29,6 +29,8 @@ uniform float far;
 uniform float uPCIndex;
 uniform float uScreenWidth;
 uniform float uScreenHeight;
+// Share the projection flag with the vertex stage for paraboloid EDL depths.
+uniform bool uUseOrthographicCamera;
 
 varying vec3	vColor;
 varying float	vLogDepth;
@@ -84,7 +86,8 @@ void main() {
 		#endif
 		
 		#if defined(use_edl)
-			gl_FragColor.a = log2(linearDepth);
+			// Keep signed orthographic depths finite when splats cross the camera plane.
+			gl_FragColor.a = uUseOrthographicCamera ? linearDepth : log2(linearDepth);
 		#endif
 		
 	#else

@@ -866,7 +866,8 @@ void main() {
 	vec4 mvPosition = modelViewMatrix * vec4(position, 1.0 );
 	vViewPosition = mvPosition.xyz;
 	gl_Position = projectionMatrix * mvPosition;
-	vLogDepth = log2(-mvPosition.z);
+	// Orthographic clipping includes signed depths on both sides of the camera plane.
+	vLogDepth = uUseOrthographicCamera ? -mvPosition.z : log2(-mvPosition.z);
 
 	// View-space camera position is the origin, so this distance is rotation invariant.
 	vDistance = length(mvPosition.xyz);
