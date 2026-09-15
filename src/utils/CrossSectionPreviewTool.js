@@ -502,7 +502,7 @@ export class CrossSectionPreviewTool {
 			if (frameSideLength !== null) {
 				this.frameSideLength = frameSideLength;
 			}
-			this.needsFit = true;
+			// Refining marker size must not reset the point-cloud initialization view.
 			this.rebuild();
 		};
 
@@ -614,17 +614,8 @@ export class CrossSectionPreviewTool {
 		if (!pointCloudBounds) {
 			return;
 		}
-		this.group.updateMatrixWorld(true);
-		const bounds = pointCloudBounds.clone().union(new THREE.Box3().setFromObject(this.group));
-		const controls = this.viewer.controls?.fitToBox
-			? this.viewer.controls
-			: this.viewer.cameraControls?.fitToBox
-				? this.viewer.cameraControls
-				: null;
-		if (controls) {
-			controls.fitToBox(bounds, false);
-		}
-		// Never fall back to the global scene fit because unrelated point clouds may be visible.
+		// Reuse initialization framing, scoped by the Viewer to this preview's main cloud.
+		this.viewer.setTopView4CameraControls(false);
 	}
 
 	update() {
