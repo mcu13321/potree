@@ -102,10 +102,11 @@ function resolveStation(segments, station) {
 /**
  * Creates vertical cross-section squares directly in Potree scene coordinates.
  *
- * @param {{ axisPaths?: THREE.Vector3[][], axisPoints?: THREE.Vector3[], frameSideLength?: number, sectionStart: number, sectionEnd: number, sectionStep: number, zRange: number }} options
+ * @param {{ axisAnchor?: "bottom" | "center", axisPaths?: THREE.Vector3[][], axisPoints?: THREE.Vector3[], frameSideLength?: number, sectionStart: number, sectionEnd: number, sectionStep: number, zRange: number }} options
  * @returns {{ corners: THREE.Vector3[], position: THREE.Vector3, tangent: THREE.Vector3 }[]}
  */
 export function buildCrossSectionPreviewFrames({
+	axisAnchor = "center",
 	axisPaths,
 	axisPoints = [],
 	frameSideLength,
@@ -162,8 +163,11 @@ export function buildCrossSectionPreviewFrames({
 
 		const sideways = new THREE.Vector3(-tangent.y, tangent.x, 0).multiplyScalar(halfWidth);
 		const vertical = new THREE.Vector3(0, 0, frameSize);
-		const lowerLeft = resolved.position.clone().sub(sideways);
-		const lowerRight = resolved.position.clone().add(sideways);
+		// Keep the station on the axis; offset only the preview corners.
+		const base = resolved.position.clone();
+		if (axisAnchor !== "bottom") base.z -= halfWidth;
+		const lowerLeft = base.clone().sub(sideways);
+		const lowerRight = base.clone().add(sideways);
 		frames.push({
 			position: resolved.position,
 			tangent,
@@ -350,6 +354,8 @@ export class CrossSectionPreviewTool {
 		}
 
 		const preview = {
+			// Only an explicit manual-axis anchor uses the bottom edge.
+			axisAnchor: config.axisAnchor === "bottom" ? "bottom" : "center",
 			activeIndex: Math.max(0, Math.trunc(toFiniteNumber(config.activeIndex) ?? 0)),
 			axisUuid: config.axisUuid ?? null,
 			mainPointCloudBaseUrl: normalizePointCloudBaseUrl(config.mainPointCloudBaseUrl),
@@ -359,6 +365,7 @@ export class CrossSectionPreviewTool {
 			sectionThickness: toFiniteNumber(config.sectionThickness),
 		};
 		const shapeKey = JSON.stringify({
+			axisAnchor: preview.axisAnchor,
 			axisUuid: preview.axisUuid,
 			mainPointCloudBaseUrl: preview.mainPointCloudBaseUrl,
 			sectionEnd: preview.sectionEnd,
@@ -559,6 +566,7 @@ export class CrossSectionPreviewTool {
 		const pointclouds = this.getPreviewPointclouds();
 		const pointCloudBounds = this.getPointCloudBounds(pointclouds);
 		const frames = buildCrossSectionPreviewFrames({
+			axisAnchor: this.preview?.axisAnchor,
 			axisPaths,
 			frameSideLength: this.frameSideLength,
 			sectionStart: this.preview?.sectionStart,

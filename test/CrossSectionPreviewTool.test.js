@@ -11,7 +11,9 @@ import {
 
 describe("buildCrossSectionPreviewFrames", () => {
 	test("creates vertical squares perpendicular to the XY axis tangent", () => {
+		// Preserve the explicit manual-axis bottom-edge contract.
 		const frames = buildCrossSectionPreviewFrames({
+			axisAnchor: "bottom",
 			axisPoints: [new THREE.Vector3(0, 0, 4), new THREE.Vector3(20, 0, 4)],
 			sectionStart: 0,
 			sectionEnd: 20,
@@ -27,6 +29,30 @@ describe("buildCrossSectionPreviewFrames", () => {
 			[10, 6, 16],
 			[10, -6, 16],
 		]);
+	});
+
+	// Verify geometric anchors at every station, including sloped axes and refined sizes.
+	test.each(["bottom", "center", undefined])("anchors squares and thickness volumes using %s", (axisAnchor) => {
+		for (const frameSideLength of [undefined, 6.6]) {
+			const frames = buildCrossSectionPreviewFrames({
+				axisAnchor, frameSideLength,
+				axisPoints: [new THREE.Vector3(0, 0, 4), new THREE.Vector3(12, 16, 9)],
+				sectionStart: 0, sectionEnd: 20, sectionStep: 5, zRange: 12,
+			});
+			expect(frames).toHaveLength(5);
+			for (const frame of frames) {
+				const anchorCorners = axisAnchor === "bottom" ? frame.corners.slice(0, 2) : frame.corners;
+				const anchor = anchorCorners.reduce((sum, corner) => sum.add(corner), new THREE.Vector3()).divideScalar(anchorCorners.length);
+				expect(anchor.distanceTo(frame.position)).toBeLessThan(1e-9);
+				expect(frame.corners[0].distanceTo(frame.corners[1])).toBeCloseTo(frameSideLength ?? 12);
+				expect(frame.corners[1].distanceTo(frame.corners[2])).toBeCloseTo(frameSideLength ?? 12);
+				const volume = buildCrossSectionPreviewVolume(frame, 2);
+				for (let index = 0; index < 4; index++) {
+					const midpoint = volume.leadingCorners[index].clone().add(volume.trailingCorners[index]).multiplyScalar(0.5);
+					expect(midpoint.distanceTo(frame.corners[index])).toBeLessThan(1e-9);
+				}
+			}
+		}
 	});
 
 	test("rejects a station range beyond the three-dimensional axis length", () => {
@@ -67,8 +93,8 @@ describe("buildCrossSectionPreviewFrames", () => {
 		});
 		const volume = buildCrossSectionPreviewVolume(frame, 2);
 
-		expect(volume.leadingCorners[0].toArray()).toEqual([1, -4, 0]);
-		expect(volume.trailingCorners[0].toArray()).toEqual([-1, -4, 0]);
+		expect(volume.leadingCorners[0].toArray()).toEqual([1, -4, -4]);
+		expect(volume.trailingCorners[0].toArray()).toEqual([-1, -4, -4]);
 	});
 
 	test("uses only the representative local vertical envelope for the shared square size", () => {
@@ -134,7 +160,7 @@ describe("buildCrossSectionPreviewFrames", () => {
 		tool.dispose();
 	});
 
-	test("shows fallback frames immediately, refines their size, and restores the axis color", () => {
+	test.each(["bottom", "center"])("refines %s anchored frames and restores the axis color", (axisAnchor) => {
 		const axisUuid = "axis-2";
 		const originalAxisColor = 0x123456;
 		const originalLineColor = 0x654321;
@@ -176,6 +202,7 @@ describe("buildCrossSectionPreviewFrames", () => {
 		const tool = new CrossSectionPreviewTool(viewer);
 
 		tool.setPreview({
+			axisAnchor,
 			axisUuid,
 			mainPointCloudBaseUrl: "project/main",
 			sectionEnd: 10,
@@ -183,6 +210,14 @@ describe("buildCrossSectionPreviewFrames", () => {
 			sectionStep: 10,
 			sectionThickness: 0.2,
 		});
+		// Inspect rendered line geometry, not only normalized preview state.
+		const expectAnchorBounds = (sideLength, anchor) => {
+			const geometry = tool.group.children[0].geometry;
+			geometry.computeBoundingBox();
+			expect(geometry.boundingBox.min.z).toBeCloseTo(anchor === "bottom" ? 0 : -sideLength / 2);
+			expect(geometry.boundingBox.max.z).toBeCloseTo(anchor === "bottom" ? sideLength : sideLength / 2);
+		};
+		expectAnchorBounds(10, axisAnchor);
 		expect(tool.frameSideLength).toBeNull();
 		expect(tool.group.children.length).toBeGreaterThan(0);
 		expect(axis.color.getHex()).toBe(0xfacc15);
@@ -197,9 +232,17 @@ describe("buildCrossSectionPreviewFrames", () => {
 		profileCallbacks.onFinish();
 
 		expect(tool.frameSideLength).toBeCloseTo(6.6);
+		expectAnchorBounds(6.6, axisAnchor);
 		expect(tool.group.children.length).toBeGreaterThan(0);
 		expect(tool.group.children[0].material.color.getHex()).toBe(0xf25f5f);
 		expect(tool.group.children[1].material.color.getHex()).toBe(0xef4444);
+		// Changing only the anchor invalidates cached geometry and pending refinement.
+		const shapeKey = tool.previewShapeKey;
+		const nextAnchor = axisAnchor === "bottom" ? "center" : "bottom";
+		tool.setPreview({...tool.preview, axisAnchor: nextAnchor});
+		expect(tool.previewShapeKey).not.toBe(shapeKey);
+		expect(tool.frameSideLength).toBeNull();
+		expectAnchorBounds(10, nextAnchor);
 		tool.clear();
 		expect(axis.color.getHex()).toBe(originalAxisColor);
 		expect(axis.line.material.color.getHex()).toBe(originalLineColor);
