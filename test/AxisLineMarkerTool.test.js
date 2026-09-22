@@ -177,6 +177,63 @@ describe("AxisLineMarkerTool", () => {
 		expect(marker.previewPoint.toArray()).toEqual([5, 6, 10]);
 	});
 
+	// Resolved points may coincide even when the original click positions are distinct.
+	it.each(["coincident", "near", "nonfinite"])("preserves the draft after %s resolution and permits retry", async (kind) => {
+		const viewer = new MockViewer();
+		const pointcloud = createPointcloud();
+		tool = new AxisLineMarkerTool(viewer);
+		const marker = tool.startInsertion();
+		for (const x of [1, 2, 3, 4]) marker.addPoint(new THREE.Vector3(x, 2, 10), pointcloud);
+		const originalPoints = marker.points;
+		const originalPositions = marker.points.map((point) => point.position.toArray());
+		const failed = vi.fn();
+		const completed = vi.fn();
+		const persisted = vi.fn();
+		tool.addEventListener("axis_line_resolve_failed", failed);
+		tool.addEventListener("axis_line_completed", completed);
+		viewer.scene.addEventListener("measurement_added_to_platform", persisted);
+		const resolver = vi.spyOn(tool, "resolveLowestPoint").mockImplementation(async (point) =>
+			new THREE.Vector3(kind === "near" ? point.position.x * 1e-10 : 0, 0, kind === "nonfinite" ? NaN : 0),
+		);
+
+		expect(await tool.finishInsertion()).toBe(false);
+		expect(marker.points).toBe(originalPoints);
+		expect(marker.points.map((point) => point.position.toArray())).toEqual(originalPositions);
+		expect(marker.points.every((point) => point.pointcloud === pointcloud)).toBe(true);
+		expect(marker.isFinalizing).toBe(false);
+		expect(marker.finished).toBe(false);
+		expect(marker.isFinished).toBe(false);
+		expect(tool.activeMarker).toBe(marker);
+		expect(tool.cameraLock).not.toBeNull();
+		expect(failed).toHaveBeenCalledTimes(1);
+		expect(persisted).not.toHaveBeenCalled();
+		expect(completed).not.toHaveBeenCalled();
+
+		// The original cloud bindings remain usable by the real resolver on retry.
+		resolver.mockRestore();
+		marker.addPoint(new THREE.Vector3(5, 2, 10), pointcloud);
+		expect(await tool.finishInsertion()).toBe(true);
+		expect(persisted).toHaveBeenCalledTimes(1);
+		expect(completed).toHaveBeenCalledTimes(1);
+		expect(tool.cameraLock).toBeNull();
+	});
+
+	it("allows cancellation after degenerate resolution", async () => {
+		// A rejected completion must not strand the user in the locked drawing session.
+		const viewer = new MockViewer();
+		tool = new AxisLineMarkerTool(viewer);
+		const marker = tool.startInsertion();
+		marker.addPoint(new THREE.Vector3(1, 2, 10), createPointcloud());
+		marker.addPoint(new THREE.Vector3(3, 2, 10), createPointcloud());
+		vi.spyOn(tool, "resolveLowestPoint").mockResolvedValue(new THREE.Vector3());
+		expect(await tool.finishInsertion()).toBe(false);
+		tool.stopInsertion();
+		expect(tool.activeMarker).toBeNull();
+		expect(tool.cameraLock).toBeNull();
+		expect(viewer.scene.measurements).not.toContain(marker);
+		expect(viewer.controls.polarRotateSpeed).toBe(0.3);
+	});
+
 	it("resolves B points only on confirmation and restores the camera lock", async () => {
 		const viewer = new MockViewer();
 		const pointcloud = createPointcloud();

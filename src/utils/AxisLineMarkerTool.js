@@ -335,6 +335,17 @@ export class AxisLineMarkerTool extends EventDispatcher {
 				throw createCancelledError();
 			}
 
+			// Validate resolved geometry before replacing the retryable draft or persisting it.
+			const valid = finalPoints.length >= 2 && finalPoints.every((point) =>
+				point && [point.x, point.y, point.z].every(Number.isFinite),
+			);
+			const hasLength = valid && finalPoints.some((point) =>
+				["x", "y", "z"].some((axis) => Math.abs(point[axis] - finalPoints[0][axis]) > 1e-9),
+			);
+			if (!hasLength) {
+				throw new Error("Resolved axis-line points have no usable length.");
+			}
+
 			marker.setFinalPoints(finalPoints);
 			marker.finished = true;
 			marker.isFinished = true;
