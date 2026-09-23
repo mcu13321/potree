@@ -2,6 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("Potree source regression", () => {
+	it("exports the opt-in box tool without enabling it in existing viewers", () => {
+		// Existing height clipping keeps its original viewer initialization path.
+		const source = readFileSync("src/Potree.js", "utf8");
+		expect(source).toContain('export { BoxClippingTool } from "./utils/BoxClippingTool.js";');
+		const viewer = readFileSync("src/viewer/viewer.js", "utf8");
+		expect(viewer).not.toContain('new BoxClippingTool');
+	});
 	it("metadata 分支里应只保留一次 OctreeLoader.load 调用", () => {
 		const source = readFileSync("src/Potree.js", "utf8");
 		const metadataBranchStart = source.indexOf("} else if (path.endsWith('metadata.json')) {");

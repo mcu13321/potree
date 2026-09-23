@@ -343,3 +343,6 @@ export function loadPointCloud(path, name, callback, getUrl){
 		}
 	});
 })(jQuery);
+
+// Expose the reusable box tool without enabling it for existing viewers.
+export { BoxClippingTool } from "./utils/BoxClippingTool.js";

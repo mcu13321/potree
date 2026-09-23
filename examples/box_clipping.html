@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Potree box clipping</title>
+<link rel="stylesheet" href="../build/potree/potree.css">
+<style>body{margin:0;font:14px sans-serif}#scene{position:absolute;inset:0}#actions{position:absolute;right:16px;top:16px;z-index:20;background:#fffe;padding:12px;border-radius:6px}button{padding:6px}#status{display:block;max-width:480px;margin-top:8px}</style>
+<script src="../libs/jquery/jquery-3.1.1.min.js"></script>
+<script src="../libs/spectrum/spectrum.js"></script>
+<script src="../libs/jquery-ui/jquery-ui.min.js"></script>
+<script src="../libs/three.js/build/three.js"></script>
+<script src="../libs/other/BinaryHeap.js"></script>
+<script src="../libs/tween/tween.min.js"></script>
+<script src="../libs/d3/d3.js"></script>
+<script src="../libs/proj4/proj4.js"></script>
+<script src="../libs/openlayers3/ol.js"></script>
+<script src="../libs/i18next/i18next.js"></script>
+<script src="../libs/jstree/jstree.js"></script>
+<script src="../build/potree/potree.js"></script>
+<script src="../libs/plasio/js/laslaz.js"></script>
+</head><body><div id="scene"></div>
+<div id="actions"><button id="toggle">Start clipping</button> <button id="direction" disabled>Keep inside</button> <button id="export" disabled>Export JSON</button> <button id="import">Import JSON</button><input id="file" type="file" accept=".json,application/json" hidden><output id="status">The red cloud is the target; the green cloud stays unchanged.</output></div>
+<script type="module">
+  const viewer=new Potree.Viewer(document.querySelector('#scene'));
+  viewer.renderer.setAnimationLoop(null);
+  viewer.setEDLEnabled(true); viewer.useHQ=true; viewer.setBackground('black');
+  const makeCloud=(red)=>{
+    const geo=new Potree.PointCloudOctreeGeometry();
+    geo.offset=new THREE.Vector3(0,0,0);geo.spacing=.2;
+    geo.boundingBox=new THREE.Box3(new THREE.Vector3(0,0,0),new THREE.Vector3(8,8,1));
+    geo.pointAttributes=new Potree.PointAttributes(['POSITION_CARTESIAN','RGBA_PACKED']);
+    geo.loader={version:new Potree.Version('1.7')};
+    const root=new Potree.PointCloudOctreeGeometryNode('r',geo,geo.boundingBox);
+    root.level=0;root.loaded=true;root.spacing=.2;
+    const positions=[],colors=[];
+    for(let x=0;x<=8;x+=.2)for(let y=0;y<=8;y+=.2){positions.push(x,y,red?.2:.6);colors.push(red?255:0,red?0:255,0,255)}
+    root.numPoints=positions.length/3;
+    root.geometry=new THREE.BufferGeometry();
+    root.geometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(positions),3));
+    root.geometry.setAttribute('rgba',new THREE.BufferAttribute(new Uint8Array(colors),4,true));
+    const indices=new Uint8Array(root.numPoints*4);
+    new Uint32Array(indices.buffer).forEach((_,i,a)=>a[i]=i);
+    root.geometry.setAttribute('indices',new THREE.BufferAttribute(indices,4,true));
+    geo.root=root;
+    const cloud=new Potree.PointCloudOctree(geo);
+    cloud.position.x=red?-9:1;cloud.material.size=5;cloud.material.pointSizeType=Potree.PointSizeType.FIXED;
+    cloud.material.activeAttributeName='rgba';cloud.name=red?'first-red':'second-green';
+    viewer.scene.addPointCloud(cloud,false);return cloud;
+  };
+  const clouds=[makeCloud(true),makeCloud(false)];
+  viewer.scene.view.position.set(0,-20,22);viewer.scene.view.lookAt(new THREE.Vector3(0,4,0));
+  viewer.setControls(viewer.fjdCameraControls);viewer.fjdCameraControls.setLookAt(0,-20,22,0,4,0,false); window.step=()=>{viewer.update(.016,performance.now());viewer.render();};
+  for(let i=0;i<4;i++)step();
+  window.viewer=viewer;window.clouds=clouds;
+
+
+  // Applications supply their own buttons; Potree owns all face editing and JSON geometry.
+  const tool=new Potree.BoxClippingTool(viewer);
+  const options={targetCloud:clouds[0]};
+  const element=id=>document.getElementById(id);
+  const run=action=>{try{action()}catch(error){element('status').textContent=error.message}};
+  tool.addEventListener('change',()=>{
+    // Imported results keep clipping active without opening the editor.
+    element('toggle').textContent=tool.editing?'Stop clipping':'Start clipping';
+    element('direction').disabled=element('export').disabled=!tool.active;
+    element('direction').textContent=tool.keep==='inside'?'Keep inside':'Keep outside';
+  });
+  element('toggle').onclick=()=>run(()=>tool.editing?tool.stop():tool.start(options));
+  element('direction').onclick=()=>run(()=>tool.setKeep(tool.keep==='inside'?'outside':'inside'));
+  element('export').onclick=()=>run(()=>{
+    const url=URL.createObjectURL(new Blob([JSON.stringify(tool.toJSON(),null,2)],{type:'application/json'}));
+    const link=document.createElement('a');link.href=url;link.download='point-cloud-clipping.json';link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  element('import').onclick=()=>element('file').click();
+  element('file').onchange=async event=>{
+    const file=event.target.files[0];event.target.value='';if(!file)return;
+    const text=await file.text();run(()=>tool.fromJSON(text,options));
+  };
+  // Use the normal rendering loop after configuring the generated fixture.
+  viewer.renderer.setAnimationLoop(()=>step());
+  window.boxClippingTool=tool;
+  window.addEventListener('pagehide',()=>tool.dispose(),{once:true});
+</script></body></html>
