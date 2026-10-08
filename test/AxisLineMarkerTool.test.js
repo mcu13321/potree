@@ -57,61 +57,30 @@ class MockViewer extends EventDispatcher {
 }
 
 function createPointcloud() {
-	const pointcloud = {
-		position: new THREE.Vector3(),
-		getPointsInProfile: vi.fn((profile, _maxDepth, callbacks) => {
-			const originX = (profile.points[0].x + profile.points[1].x) / 2;
-			const originY = profile.points[0].y;
-			const request = {cancel: vi.fn(() => callbacks.onCancel())};
-			setTimeout(() => {
-				callbacks.onProgress({
-					points: {
-						segments: [{
-							points: {
-								data: {
-									position: new Float32Array([
-										originX + 0.01, originY, 5,
-										originX + 0.015, originY, 2,
-										originX + 0.04, originY, 1,
-									]),
-								},
-							},
-						}],
-					},
-				});
-				callbacks.onFinish();
-			}, 0);
-			return request;
-		}),
-	};
-	return pointcloud;
+	const columns = [1, 2, 3, 4, 5].map((x) => [
+		[x, 2, 10], [x + 0.01, 2, 5], [x + 0.04, 2, 2],
+		[x + 0.06, 2, 2.02], [x + 0.08, 2, 1.99],
+	]);
+	return createLoadedPointcloud([
+		...columns.flat(),
+		[3, 4, 10], [3.01, 4, 5], [3.04, 4, 2], [3.06, 4, 2.02], [3.08, 4, 1.99],
+	]);
 }
 
-function createSparsePointcloud() {
-	const pointcloud = {
+function createLoadedPointcloud(points) {
+	const positions = new Float32Array(points.flat());
+	const vectors = points.map((point) => new THREE.Vector3(...point));
+	const bounds = new THREE.Box3().setFromPoints(vectors);
+	return {
 		position: new THREE.Vector3(),
-		getPointsInProfile: vi.fn((profile, _maxDepth, callbacks) => {
-			const originX = (profile.points[0].x + profile.points[1].x) / 2;
-			const originY = profile.points[0].y;
-			const request = {cancel: vi.fn(() => callbacks.onCancel())};
-			setTimeout(() => {
-				callbacks.onProgress({
-					points: {
-						segments: [{
-							points: {
-								data: {
-									position: new Float32Array([originX + 0.8, originY, 2]),
-								},
-							},
-						}],
-					},
-				});
-				callbacks.onFinish();
-			}, 0);
-			return request;
-		}),
+		matrixWorld: new THREE.Matrix4(),
+		visibleNodes: [{
+			getBoundingBox: () => bounds,
+			geometryNode: {geometry: {attributes: {position: {array: positions, itemSize: 3}}}},
+			sceneNode: {matrixWorld: new THREE.Matrix4()},
+		}],
+		getPointsInProfile: vi.fn(() => { throw new Error("Unexpected LOD request"); }),
 	};
-	return pointcloud;
 }
 
 function dispatchMouse(target, type, {button = 0, clientX, clientY}) {
@@ -234,7 +203,7 @@ describe("AxisLineMarkerTool", () => {
 		expect(viewer.controls.polarRotateSpeed).toBe(0.3);
 	});
 
-	it("resolves B points only on confirmation and restores the camera lock", async () => {
+	it("resolves loaded floor points only on confirmation and restores the camera lock", async () => {
 		const viewer = new MockViewer();
 		const pointcloud = createPointcloud();
 		tool = new AxisLineMarkerTool(viewer);
@@ -255,7 +224,7 @@ describe("AxisLineMarkerTool", () => {
 		expect(pointcloud.getPointsInProfile).not.toHaveBeenCalled();
 		expect(await tool.finishInsertion()).toBe(true);
 
-		expect(pointcloud.getPointsInProfile).toHaveBeenCalledTimes(2);
+		expect(pointcloud.getPointsInProfile).not.toHaveBeenCalled();
 		expect(marker.points.map((point) => point.position.z)).toEqual([2, 2]);
 		expect(marker.finished).toBe(true);
 		expect(tool.activeMarker).toBeNull();
@@ -269,9 +238,11 @@ describe("AxisLineMarkerTool", () => {
 		expect(viewer.controls.polarRotateSpeed).toBe(0.3);
 	});
 
-	it("expands through all fixed tolerance stages for sparse point clouds", async () => {
+	it("falls back to a sparse loaded floor point without requesting LOD", async () => {
 		const viewer = new MockViewer();
-		const pointcloud = createSparsePointcloud();
+		const pointcloud = createLoadedPointcloud([
+			[1.8, 2, 2], [3.8, 4, 2],
+		]);
 		tool = new AxisLineMarkerTool(viewer);
 		const marker = tool.startInsertion();
 		marker.addPoint(new THREE.Vector3(1, 2, 10), pointcloud);
@@ -279,11 +250,53 @@ describe("AxisLineMarkerTool", () => {
 
 		expect(await tool.finishInsertion()).toBe(true);
 
-		// Each point must miss 0.2 m and 0.5 m before matching the fixed 1.0 m stage.
-		expect(pointcloud.getPointsInProfile).toHaveBeenCalledTimes(6);
+		expect(pointcloud.getPointsInProfile).not.toHaveBeenCalled();
 		expect(marker.points.map((point) => point.position.z)).toEqual([2, 2]);
 		expect(marker.points[0].position.x).toBeCloseTo(1.8);
 		expect(marker.points[1].position.x).toBeCloseTo(3.8);
+	});
+
+	it("transforms loaded node coordinates into the axis scene", async () => {
+		const viewer = new MockViewer();
+		const pointcloud = createLoadedPointcloud([
+			[1, 2, 10], [1.04, 2, 2], [1.06, 2, 2.02], [1.08, 2, 1.99],
+			[3, 2, 10], [3.04, 2, 2], [3.06, 2, 2.02], [3.08, 2, 1.99],
+		]);
+		pointcloud.matrixWorld.makeTranslation(100, 0, 0);
+		pointcloud.visibleNodes[0].sceneNode.matrixWorld.makeTranslation(100, 0, 0);
+		tool = new AxisLineMarkerTool(viewer);
+		const marker = tool.startInsertion();
+		marker.addPoint(new THREE.Vector3(101, 2, 10), pointcloud);
+		marker.addPoint(new THREE.Vector3(103, 2, 10), pointcloud);
+
+		expect(await tool.finishInsertion()).toBe(true);
+		expect(marker.points.map((point) => point.position.x)).toEqual([
+			expect.closeTo(101.04, 2), expect.closeTo(103.04, 2),
+		]);
+		expect(pointcloud.getPointsInProfile).not.toHaveBeenCalled();
+	});
+
+	it("cancels a frame-budgeted scan without persisting a draft", async () => {
+		const viewer = new MockViewer();
+		const pointcloud = createPointcloud();
+		const scheduled = [];
+		vi.stubGlobal("requestAnimationFrame", (callback) => scheduled.push(callback));
+		let clock = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => (clock += 5));
+		tool = new AxisLineMarkerTool(viewer);
+		const marker = tool.startInsertion();
+		marker.addPoint(new THREE.Vector3(1, 2, 10), pointcloud);
+		marker.addPoint(new THREE.Vector3(3, 4, 10), pointcloud);
+		const persisted = vi.fn();
+		viewer.scene.addEventListener("measurement_added_to_platform", persisted);
+		const finishing = tool.finishInsertion();
+		await vi.waitFor(() => expect(scheduled.length).toBeGreaterThanOrEqual(2));
+		tool.stopInsertion();
+		for (const callback of scheduled) callback();
+		expect(await finishing).toBe(false);
+		expect(persisted).not.toHaveBeenCalled();
+		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 	});
 
 	it("commits three DOM clicks by reusing the matching preview hit", async () => {

@@ -1,17 +1,13 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {EventDispatcher} from "../EventDispatcher.js";
 import {
-	AXIS_LINE_DEFAULT_XY_TOLERANCES,
 	AxisLineMarker,
-	selectAxisLineLowestPoint,
+	selectAxisLineLoadedBottomPoint,
 } from "./AxisLineMarker.js";
 
 const CANCELLED_ERROR_NAME = "AxisLineResolutionCancelledError";
-const AXIS_LINE_XY_TOLERANCE_STAGES = Object.freeze([
-	AXIS_LINE_DEFAULT_XY_TOLERANCES,
-	Object.freeze([0.5]),
-	Object.freeze([1.0]),
-]);
+const MAX_AXIS_SEARCH_DISTANCE = 1.0;
+const SCAN_FRAME_BUDGET_MS = 4;
 
 function createCancelledError() {
 	const error = new Error("Axis-line point resolution was cancelled.");
@@ -43,7 +39,6 @@ export class AxisLineMarkerTool extends EventDispatcher {
 		this.previewFrame = null;
 		this.previewPosition = null;
 		this.previewHit = null;
-		this.profileRequests = new Set();
 		this.cameraLock = null;
 
 		this.onMeasurementAdded = this.onMeasurementAdded.bind(this);
@@ -134,7 +129,6 @@ export class AxisLineMarkerTool extends EventDispatcher {
 			return;
 		}
 
-		this.cancelProfileRequests();
 		this.previewHit = null;
 		marker.finished = false;
 		marker.isFinished = false;
@@ -149,7 +143,6 @@ export class AxisLineMarkerTool extends EventDispatcher {
 
 	stopInsertion({discardDraft = true, reason = "cancelled"} = {}) {
 		this.cancelPreviewFrame();
-		this.cancelProfileRequests();
 
 		const marker = this.activeMarker;
 		if (marker) {
@@ -375,81 +368,48 @@ export class AxisLineMarkerTool extends EventDispatcher {
 	}
 
 	async resolveLowestPoint(point) {
-		if (!point.pointcloud?.getPointsInProfile) {
+		const pointcloud = point.pointcloud;
+		if (!pointcloud?.visibleNodes) {
 			throw new Error("The selected axis-line point has no point cloud.");
 		}
-
-		for (const tolerances of AXIS_LINE_XY_TOLERANCE_STAGES) {
-			const selected = await this.resolveLowestPointInStage(point, tolerances);
-			if (selected) {
-				return selected;
-			}
-		}
-
-		throw new Error("No point-cloud point matches the axis-line XY tolerance.");
-	}
-
-	resolveLowestPointInStage(point, tolerances) {
 		const origin = point.position.clone();
-		const pointcloud = point.pointcloud;
-		const maxTolerance = tolerances[tolerances.length - 1];
-		const margin = Math.max(maxTolerance * 0.01, 0.0001);
-		const profile = {
-			points: [
-				origin.clone().add(new THREE.Vector3(-maxTolerance - margin, 0, 0)),
-				origin.clone().add(new THREE.Vector3(maxTolerance + margin, 0, 0)),
-			],
-			width: (maxTolerance + margin) * 2,
-		};
+		const marker = this.activeMarker;
+		const candidates = [];
+		const position = new THREE.Vector3();
+		const worldBox = new THREE.Box3();
+		const maxDistanceSquared = MAX_AXIS_SEARCH_DISTANCE ** 2;
+		let frameStart = performance.now();
 
-		return new Promise((resolve, reject) => {
-			const candidates = [];
-			let settled = false;
-			let request = null;
-			const finish = (callback) => {
-				if (settled) {
-					return;
+		// Visible nodes already have decoded geometry; this scan never requests another LOD.
+		for (const node of [...pointcloud.visibleNodes]) {
+			if (marker !== this.activeMarker || !marker?.isFinalizing) throw createCancelledError();
+			const attribute = node.geometryNode?.geometry?.attributes?.position;
+			const matrix = node.sceneNode?.matrixWorld;
+			const bounds = node.getBoundingBox?.();
+			if (!attribute || !matrix || !bounds) continue;
+			worldBox.copy(bounds).applyMatrix4(pointcloud.matrixWorld);
+			const dx = Math.max(worldBox.min.x - origin.x, 0, origin.x - worldBox.max.x);
+			const dy = Math.max(worldBox.min.y - origin.y, 0, origin.y - worldBox.max.y);
+			if (dx * dx + dy * dy > maxDistanceSquared) continue;
+			const values = attribute.array;
+			const itemSize = attribute.itemSize;
+			for (let index = 0; index < values.length; index += itemSize) {
+				position.set(values[index], values[index + 1], values[index + 2]).applyMatrix4(matrix);
+				const offsetX = position.x - origin.x;
+				const offsetY = position.y - origin.y;
+				if (offsetX * offsetX + offsetY * offsetY <= maxDistanceSquared) {
+					candidates.push(position.clone());
 				}
-				settled = true;
-				if (request) {
-					this.profileRequests.delete(request);
+				if (performance.now() - frameStart >= SCAN_FRAME_BUDGET_MS) {
+					await new Promise((resolve) => (globalThis.requestAnimationFrame ?? setTimeout)(resolve));
+					if (marker !== this.activeMarker || !marker?.isFinalizing) throw createCancelledError();
+					frameStart = performance.now();
 				}
-				callback();
-			};
-
-			request = pointcloud.getPointsInProfile(profile, null, {
-				onProgress: (event) => {
-					for (const segment of event.points?.segments ?? []) {
-						const positions = segment.points?.data?.position;
-						if (!positions) {
-							continue;
-						}
-						for (let index = 0; index < positions.length; index += 3) {
-							candidates.push(new THREE.Vector3(
-								positions[index] + pointcloud.position.x,
-								positions[index + 1] + pointcloud.position.y,
-								positions[index + 2] + pointcloud.position.z,
-							));
-						}
-					}
-				},
-				onFinish: () => finish(() => {
-					resolve(selectAxisLineLowestPoint(origin, candidates, tolerances));
-				}),
-				onCancel: () => finish(() => reject(createCancelledError())),
-			});
-			if (!settled) {
-				this.profileRequests.add(request);
 			}
-		});
-	}
-
-	cancelProfileRequests() {
-		const requests = [...this.profileRequests];
-		this.profileRequests.clear();
-		for (const request of requests) {
-			request.cancel?.();
 		}
+		const selected = selectAxisLineLoadedBottomPoint(origin, candidates);
+		if (!selected) throw new Error("No loaded point-cloud point matches the axis-line XY tolerance.");
+		return selected;
 	}
 
 	cancelPreviewFrame() {

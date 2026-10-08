@@ -3,6 +3,7 @@ import {describe, expect, it} from "vitest";
 import {
 	AXIS_LINE_DEFAULT_XY_TOLERANCES,
 	AxisLineMarker,
+	selectAxisLineLoadedBottomPoint,
 	selectAxisLineLowestPoint,
 } from "../src/utils/AxisLineMarker.js";
 
@@ -42,30 +43,47 @@ describe("AxisLineMarker", () => {
 		expect(marker.line.geometry._maxInstanceCount).toBeUndefined();
 	});
 
-	it("selects the lowest Z point from the nearest populated XY tolerance", () => {
+	it("skips nearby roof points when a supported floor band exists", () => {
 		const origin = new THREE.Vector3(0, 0, 10);
 		const candidates = [
-			new THREE.Vector3(0.01, 0, 8),
-			new THREE.Vector3(0.015, 0, 6),
+			new THREE.Vector3(0, 0, 10),
+			new THREE.Vector3(0.01, 0, 10),
 			new THREE.Vector3(0.04, 0, 1),
+			new THREE.Vector3(0.06, 0, 1.02),
+			new THREE.Vector3(0.08, 0, 0.99),
 		];
 
-		const selected = selectAxisLineLowestPoint(
-			origin,
-			candidates,
-			AXIS_LINE_DEFAULT_XY_TOLERANCES,
-		);
+		const selected = selectAxisLineLoadedBottomPoint(origin, candidates);
 
-		expect(selected.toArray()).toEqual([0.015, 0, 6]);
+		expect(selected.toArray()).toEqual([0.04, 0, 1]);
 	});
 
-	it("expands to the next tolerance only when the smaller tolerance is empty", () => {
+	it("ignores an isolated low outlier and widens the loaded sample when needed", () => {
+		const selected = selectAxisLineLoadedBottomPoint(new THREE.Vector3(0, 0, 10), [
+			new THREE.Vector3(0, 0, 10),
+			new THREE.Vector3(0.01, 0, -100),
+			new THREE.Vector3(0.14, 0, 1),
+			new THREE.Vector3(0.16, 0, 1.02),
+			new THREE.Vector3(0.18, 0, 0.99),
+		]);
+		expect(selected.toArray()).toEqual([0.14, 0, 1]);
+	});
+
+	it("falls back to the lowest loaded point when no supported floor exists", () => {
+		const selected = selectAxisLineLoadedBottomPoint(new THREE.Vector3(0, 0, 10), [
+			new THREE.Vector3(0, 0, 10),
+			new THREE.Vector3(0.04, 0, 9),
+		]);
+		expect(selected.toArray()).toEqual([0.04, 0, 9]);
+		expect(selectAxisLineLoadedBottomPoint(new THREE.Vector3(), [])).toBeNull();
+	});
+
+	it("preserves the original exported nearest-populated selector", () => {
 		const selected = selectAxisLineLowestPoint(
 			new THREE.Vector3(0, 0, 10),
-			[new THREE.Vector3(0.04, 0, 3), new THREE.Vector3(0.09, 0, 1)],
+			[new THREE.Vector3(0.01, 0, 8), new THREE.Vector3(0.04, 0, 1)],
 			AXIS_LINE_DEFAULT_XY_TOLERANCES,
 		);
-
-		expect(selected.toArray()).toEqual([0.04, 0, 3]);
+		expect(selected.toArray()).toEqual([0.01, 0, 8]);
 	});
 });
