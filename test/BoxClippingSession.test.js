@@ -78,7 +78,7 @@ test('initial box matches world bounds and excludes native transform handles', (
   assert.deepEqual(volume.position.toArray(), [14, -14, 6])
   assert.deepEqual(volume.scale.toArray(), [8, 12, 6])
   assert.equal(volume.clip, true)
-  assert.equal(volume.frame.material.color.getHex(), 0xffff00)
+  assert.equal(volume.frame.material.color.getHex(), 0x5432eb)
   assert.equal(volume.frame.material.depthTest, false)
   assert.equal(viewer.inputHandler.drag, null)
   assert.equal(viewer.clipTask, Potree.ClipTask.NONE)

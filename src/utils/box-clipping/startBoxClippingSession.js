@@ -31,8 +31,8 @@ export function startBoxClippingSession(viewer, { targetCloud, matchesTarget }, 
   if (volume.frame) {
     volume.frame.material.depthTest = false
     volume.frame.material.depthWrite = false
-    // Yellow distinguishes the box outline from the three axis handle colors.
-    volume.frame.material.color.set(0xffff00)
+    // Match the host themeBrand purple while retaining the three axis handle colors.
+    volume.frame.material.color.set(0x5432eb)
     volume.frame.renderOrder = 1
   }
   scene.addVolume(volume)

@@ -27,7 +27,8 @@ function fixture() {
   const canvas = document.createElement('canvas');
   host.append(canvas); document.body.append(host);
   canvas.getBoundingClientRect = () => ({left:20,top:30,width:800,height:600});
-  viewer.renderer = {domElement:canvas};
+  // Record overlay rendering without requiring a WebGL context.
+  viewer.renderer = {domElement:canvas, autoClear:true, clearDepth:vi.fn(), render:vi.fn()};
   viewer.scene = new EventDispatcher();
   viewer.scene.volumes = [];
   viewer.scene.addVolume = v => viewer.scene.volumes.push(v);
@@ -56,20 +57,24 @@ function fixture() {
       cloud.material.clipTask=viewer.clipTask; cloud.material.clipMethod=viewer.clipMethod;
     }
     viewer.dispatchEvent({type:'update'});
+    viewer.dispatchEvent({type:'render.pass.end'});
   };
-  return {viewer,tool,host,tick,targetCloud:viewer.scene.pointclouds[0]};
+  return {viewer,tool,host,canvas,camera,tick,targetCloud:viewer.scene.pointclouds[0]};
 }
 
-test('default targets one object, mounts twelve native buttons, and cleans up on scene change', () => {
+test('default targets one object, renders twelve native 3D handles, and cleans up on scene change', () => {
   const {viewer,tool,host,tick,targetCloud} = fixture();
   const changes=[]; tool.addEventListener('change', e=>changes.push(e.active));
   tool.start({targetCloud}); tick();
   expect(viewer.scene.pointclouds.map(c=>c.material.clipTask)).toEqual([2,0,0]);
-  expect(host.querySelectorAll('button')).toHaveLength(12);
-  expect(tool.volume.frame.material.color.getHex()).toBe(0xffff00);
+  // Face handles are scene objects rather than DOM button hit rectangles.
+  expect(host.querySelectorAll('button')).toHaveLength(0);
+  const handles = viewer.renderer.render.mock.calls.at(-1)[0];
+  expect(handles.children.filter(node => node.userData.face)).toHaveLength(6);
+  expect(tool.volume.frame.material.color.getHex()).toBe(0x5432eb);
   for(const axis of ['x','y','z']) {
-    expect(host.querySelector(`[data-face="${axis}+"] button`).style.background)
-      .toBe(host.querySelector(`[data-face="${axis}-"] button`).style.background);
+    expect(handles.getObjectByName('clipping-face-' + axis + '+').getObjectByName('move').children[0].material.color.getHex())
+      .toBe(handles.getObjectByName('clipping-face-' + axis + '-').getObjectByName('move').children[0].material.color.getHex());
   }
   viewer.dispatchEvent({type:'scene_changed'});
   expect(tool.active).toBe(false);
@@ -77,6 +82,8 @@ test('default targets one object, mounts twelve native buttons, and cleans up on
   expect(host.style.position).toBe('');
   expect(viewer.scene.volumes).toHaveLength(0);
   expect(viewer._listeners.update).toHaveLength(0);
+  expect(viewer._listeners['render.pass.end']).toHaveLength(0);
+  expect(handles.children).toHaveLength(0);
   expect(changes).toEqual([true,false]);
 });
 
@@ -101,27 +108,69 @@ test('host predicate includes duplicates and import preserves v1 without mutatin
   expect(viewer.scene.volumes).toHaveLength(0);
 });
 
-test('pointer cancellation restores the box and releases capture on dispose', () => {
-  const {tool,host,targetCloud}=fixture(); tool.start({targetCloud});
-  const button=host.querySelector('[data-face="z+"] [data-mode="rotate"]');
-  let captured=false;
-  button.setPointerCapture=()=>{captured=true;};
-  button.hasPointerCapture=()=>captured;
-  button.releasePointerCapture=()=>{captured=false;};
-  const pointer=(type,x)=>{
-    const e=new MouseEvent(type,{bubbles:true,cancelable:true,button:0,clientX:x,clientY:100});
-    Object.defineProperties(e,{pointerId:{value:1},pointerType:{value:'mouse'}});
-    button.dispatchEvent(e);
+// Use actual raycasting against a front-facing arc and verify compatibility-event isolation.
+function rotationFixture() {
+  const value = fixture();
+  const {tool, targetCloud, camera, canvas, viewer, tick} = value;
+  camera.position.set(0,0,20); camera.lookAt(0,0,0); camera.updateMatrixWorld(true);
+  tool.start({targetCloud}); tick();
+  const scene = viewer.renderer.render.mock.calls.at(-1)[0];
+  const face = scene.getObjectByName('clipping-face-z+');
+  const ndc = face.localToWorld(new Vector3(16,0,12)).project(camera);
+  const x = 20 + (ndc.x+1)*400, y = 30 + (1-ndc.y)*300;
+  let captured = false;
+  canvas.setPointerCapture = vi.fn(() => {captured=true;});
+  canvas.hasPointerCapture = () => captured;
+  canvas.releasePointerCapture = vi.fn(() => {captured=false;});
+  const pointer = (type, dx=0, dy=0) => {
+    const event = new MouseEvent(type,{bubbles:true,cancelable:true,button:0,clientX:x+dx,clientY:y+dy});
+    Object.defineProperties(event,{pointerId:{value:1},pointerType:{value:'mouse'}});
+    canvas.dispatchEvent(event);
+    return event;
   };
-  const box=tool.volume; const before=box.quaternion.clone();
-  pointer('pointerdown',100); pointer('pointermove',160);
+  return {...value, scene, pointer, captured:()=>captured, x, y};
+}
+
+// Every cancellation path must restore the exact pre-drag pose and release capture.
+test.each(['escape','blur','pointercancel','lostpointercapture','dispose'])('%s cancels an entity rotation', kind => {
+  const {tool,host,canvas,pointer,captured} = rotationFixture();
+  const box=tool.volume, before=box.quaternion.clone();
+  pointer('pointerdown'); pointer('pointermove',60);
   expect(box.quaternion.equals(before)).toBe(false);
-  window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
-  expect(box.quaternion.equals(before)).toBe(true); expect(captured).toBe(false);
-  pointer('pointerdown',100); pointer('pointermove',160); tool.dispose();
-  expect(box.quaternion.equals(before)).toBe(true); expect(captured).toBe(false);
-  expect(host.querySelectorAll('button')).toHaveLength(0);
-  expect(()=>tool.start({targetCloud})).toThrow('Unavailable');
+  expect(captured()).toBe(true);
+  if (kind==='escape') window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
+  else if (kind==='blur') window.dispatchEvent(new Event('blur'));
+  else if (kind==='dispose') tool.dispose();
+  else pointer(kind);
+  expect(box.quaternion.equals(before)).toBe(true);
+  expect(captured()).toBe(false);
+  expect(canvas.style.cursor).toBe('');
+  if(kind==='dispose') {
+    expect(host.querySelector('[data-potree-box-clipping]')).toBeNull();
+    expect(()=>tool.start()).toThrow('Unavailable');
+  }
+});
+
+// Pointer events and their compatibility mouse events cannot reach existing camera listeners.
+test('entity drag keeps horizontal rotation sensitivity and leaves misses to the camera', () => {
+  const {tool,canvas,pointer,x,y,viewer,scene} = rotationFixture();
+  const cameraMouse=vi.fn(), cameraPointer=vi.fn();
+  canvas.addEventListener('mousedown',cameraMouse);
+  canvas.addEventListener('pointerdown',cameraPointer);
+  const before=tool.volume.quaternion.clone();
+  pointer('pointerdown');
+  canvas.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,clientX:x,clientY:y}));
+  pointer('pointermove',60,20); pointer('pointerup',60,20);
+  expect(tool.volume.quaternion.angleTo(before)).toBeCloseTo(Math.PI/6);
+  expect(cameraMouse).not.toHaveBeenCalled(); expect(cameraPointer).not.toHaveBeenCalled();
+  expect(viewer.renderer.autoClear).toBe(true);
+  expect(viewer.renderer.clearDepth).toHaveBeenCalled();
+  expect(scene.getObjectByName('clipping-face-z+')).toBeTruthy();
+  const miss=new MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0,clientX:21,clientY:31});
+  Object.defineProperties(miss,{pointerId:{value:2},pointerType:{value:'mouse'}});
+  canvas.dispatchEvent(miss);
+  canvas.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:21,clientY:31}));
+  expect(cameraPointer).toHaveBeenCalledOnce(); expect(cameraMouse).toHaveBeenCalledOnce();
 });
 
 test('only one tool is active per viewer and removing the last target closes it', () => {
@@ -166,7 +215,8 @@ test('import applies a hidden result to the explicit target and editing resumes 
   tool.start();
   expect(tool.volume).toBe(box); expect(tool.volume.matrixWorld.equals(matrix)).toBe(true);
   expect(tool.editing).toBe(true); expect(tool.volume.visible).toBe(true);
-  expect(host.querySelectorAll('button')).toHaveLength(12);
+  tick();
+  expect(viewer.renderer.render.mock.calls.at(-1)[0].children.filter(node=>node.userData.face)).toHaveLength(6);
   expect(()=>tool.fromJSON('{',{targetCloud:viewer.scene.pointclouds[0]})).toThrow('InvalidJson');
   expect(tool.targetCloud).toBe(selected); expect(tool.editing).toBe(true);
   tool.stop();

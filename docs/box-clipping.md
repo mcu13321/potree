@@ -47,9 +47,10 @@ tool.start({
 
 ## 交互与兼容边界
 
-- 黄线显示 12 条边，不显示实体面。每个面中心有移动和旋转按钮，X 为红色、Y 为绿色、Z 为蓝色，正反面同色。
-- 鼠标左键拖动移动按钮只移动对应面，对面保持固定；拖动旋转按钮绕该面的外法线旋转整个盒子。水平右移 2 CSS 像素对应右手方向旋转 1°。
-- 支持透视、正交相机；近乎正视一个面时，移动使用竖直拖动。重叠按钮由更靠近相机的面优先响应。
+- 主题紫色（`#5432EB`）线框显示 12 条边，不显示实体面。每个面中心有朝外的立体平移箭头，箭杆外围有带箭头的 300° 立体旋转圆弧，X 为红色、Y 为绿色、Z 为蓝色，正反面同色。
+- 鼠标左键拖动平移箭头只移动对应面，对面保持固定；拖动旋转圆弧绕该面的外法线旋转整个盒子。水平右移 2 CSS 像素对应右手方向旋转 1°。
+- 支持透视、正交相机；近乎正视一个面时，移动使用竖直拖动。重叠实体手柄由更靠近相机的面优先响应。
+- 实体方向跟随盒子旋转，箭头长约 40 CSS 像素、圆弧直径约 36 CSS 像素，尺寸随相机缩放补偿。手柄显示在点云前方，通过真实三维几何拾取；悬停和拖动高亮，未命中时保留相机交互。
 - Escape、失焦、指针取消和捕获丢失恢复拖动前姿态。控件挂在 Viewer 画布所属文档，支持 iframe。
 - 不改变 `viewer.clipTask`、`viewer.clipMethod` 或原生 TransformControls。工具未启用时没有裁切副作用。
 - 现有 keep-inside 高度盒与新盒取交集；保留盒外时仍限制在高度范围内。工具关闭保留最新高度状态。
@@ -80,7 +81,7 @@ tool.start({
 ## 验证与构建
 
 ```sh
-npx vitest run test/BoxClippingTool.test.js test/BoxClippingSession.test.js test/potreeClippingFaces.test.js test/potreeClippingJson.test.js test/potreeOutsideClipBoxes.test.js test/PotreeSourceRegression.test.js
+npx vitest run test/BoxClippingTool.test.js test/BoxClippingSession.test.js test/potreeClippingFaces.test.js test/BoxClippingHandles.test.js test/potreeClippingJson.test.js test/potreeOutsideClipBoxes.test.js test/PotreeSourceRegression.test.js
 node -e "require('fs').mkdirSync('build', {recursive:true})"
 npx gulp shaders
 npx rollup -c
