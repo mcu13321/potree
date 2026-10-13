@@ -11,7 +11,6 @@ const PREVIEW_AXIS_COLOR = 0xfacc15;
 const ACTIVE_SECTION_OPACITY = 0.2;
 const FRAME_SIZE_PADDING = 1.1;
 const ENVELOPE_PERCENTILE = 0.02;
-const LOCAL_ENVELOPE_PROFILE_MAX_DEPTH = 3;
 
 function toFiniteNumber(value) {
 	const number = Number(value);
@@ -324,10 +323,6 @@ export class CrossSectionPreviewTool {
 		this.preview = null;
 		this.previewShapeKey = null;
 		this.frameSideLength = null;
-		this.envelopeRequestToken = 0;
-		this.envelopeRequests = new Set();
-		this.envelopePending = false;
-		this.envelopeResolved = false;
 		this.previewAxis = null;
 		this.previewAxisColor = null;
 		this.previewAxisLineColor = null;
@@ -375,12 +370,9 @@ export class CrossSectionPreviewTool {
 		});
 		const isNewShape = shapeKey !== this.previewShapeKey;
 		this.needsFit ||= isNewShape;
-		if (isNewShape) {
-			this.cancelEnvelopeRequests();
-			this.frameSideLength = null;
-			this.envelopePending = false;
-			this.envelopeResolved = false;
-		}
+		// Size changes never invalidate the camera or restart a profile request.
+		this.frameSideLength = Number.isFinite(config.frameSideLength) && config.frameSideLength > EPSILON
+			? config.frameSideLength : null;
 		this.previewShapeKey = shapeKey;
 		this.preview = preview;
 		this.rebuild();
@@ -425,14 +417,6 @@ export class CrossSectionPreviewTool {
 			: null;
 	}
 
-	cancelEnvelopeRequests() {
-		this.envelopeRequestToken++;
-		for (const request of this.envelopeRequests) {
-			request.cancel?.();
-		}
-		this.envelopeRequests.clear();
-	}
-
 	setPreviewAxisColor(axis) {
 		if (this.previewAxis === axis) {
 			return;
@@ -464,93 +448,6 @@ export class CrossSectionPreviewTool {
 		this.previewAxisLineColor = null;
 	}
 
-	requestFrameSideLength(frames, pointclouds, pointCloudBounds) {
-		if (this.envelopeResolved || this.envelopePending || frames.length === 0 || !pointCloudBounds) {
-			return;
-		}
-
-		const requestedPointclouds = pointclouds.filter((pointcloud) => pointcloud?.getPointsInProfile);
-		if (requestedPointclouds.length === 0) {
-			this.envelopeResolved = true;
-			return;
-		}
-
-		const representativeFrame = frames[Math.floor(frames.length / 2)];
-		const boundsSize = pointCloudBounds.getSize(new THREE.Vector3());
-		const probeWidth = Math.hypot(boundsSize.x, boundsSize.y);
-		const thickness = Math.max(this.preview?.sectionThickness ?? 0, EPSILON);
-		if (!representativeFrame || probeWidth <= EPSILON) {
-			this.envelopeResolved = true;
-			return;
-		}
-
-		const offset = representativeFrame.tangent.clone().multiplyScalar(thickness / 2);
-		const profile = {
-			points: [
-				representativeFrame.position.clone().sub(offset),
-				representativeFrame.position.clone().add(offset),
-			],
-			width: probeWidth,
-		};
-		const samples = [];
-		const requestToken = ++this.envelopeRequestToken;
-		let pendingRequests = requestedPointclouds.length;
-		this.envelopePending = true;
-		const finishRequest = (request) => {
-			this.envelopeRequests.delete(request);
-			pendingRequests--;
-			if (pendingRequests !== 0 || requestToken !== this.envelopeRequestToken) {
-				return;
-			}
-
-			this.envelopePending = false;
-			this.envelopeResolved = true;
-			const frameSideLength = estimateCrossSectionFrameSideLength(samples);
-			if (frameSideLength !== null) {
-				this.frameSideLength = frameSideLength;
-			}
-			// Refining marker size must not reset the point-cloud initialization view.
-			this.rebuild();
-		};
-
-		for (const pointcloud of requestedPointclouds) {
-			let request = null;
-			const pointcloudPosition = pointcloud.position ?? new THREE.Vector3();
-			try {
-				request = pointcloud.getPointsInProfile(profile, LOCAL_ENVELOPE_PROFILE_MAX_DEPTH, {
-					onProgress: (event) => {
-						if (requestToken !== this.envelopeRequestToken) {
-							return;
-						}
-						for (const segment of event.points?.segments ?? []) {
-							const positions = segment.points?.data?.position;
-							if (!positions) {
-								continue;
-							}
-							for (let index = 0; index < positions.length; index += 3) {
-								samples.push(new THREE.Vector3(
-									positions[index] + pointcloudPosition.x,
-									positions[index + 1] + pointcloudPosition.y,
-									positions[index + 2] + pointcloudPosition.z,
-								));
-							}
-						}
-					},
-					onFinish: () => finishRequest(request),
-					onCancel: () => finishRequest(request),
-				});
-			} catch {
-				finishRequest(request);
-				continue;
-			}
-			if (request) {
-				this.envelopeRequests.add(request);
-			} else {
-				finishRequest(request);
-			}
-		}
-	}
-
 	clearGroup() {
 		for (const child of [...this.group.children]) {
 			this.group.remove(child);
@@ -572,14 +469,18 @@ export class CrossSectionPreviewTool {
 			sectionStart: this.preview?.sectionStart,
 			sectionEnd: this.preview?.sectionEnd,
 			sectionStep: this.preview?.sectionStep,
-			zRange: pointCloudBounds ? pointCloudBounds.max.z - pointCloudBounds.min.z : null,
+			// No bounds fallback: wait for the root-only estimate before drawing.
+			zRange: undefined,
 		});
-		this.pendingGeometry = Boolean(this.preview) && frames.length === 0;
+		this.pendingGeometry = Boolean(this.preview) && axisPaths.length === 0;
+		// Initialize the view once on entry, not when asynchronous size calculation completes.
+		if (this.needsFit && axisPaths.length > 0 && pointCloudBounds) {
+			this.fitToPreview(pointCloudBounds);
+			this.needsFit = false;
+		}
 		if (frames.length === 0) {
 			return;
 		}
-		this.requestFrameSideLength(frames, pointclouds, pointCloudBounds);
-		// Render the main-cloud bounds fallback immediately while the local envelope refines asynchronously.
 
 		const normalPositions = [];
 		const activeFrame = frames[this.preview.activeIndex] ?? null;
@@ -643,12 +544,9 @@ export class CrossSectionPreviewTool {
 	}
 
 	clear() {
-		this.cancelEnvelopeRequests();
 		this.preview = null;
 		this.previewShapeKey = null;
 		this.frameSideLength = null;
-		this.envelopePending = false;
-		this.envelopeResolved = false;
 		this.restorePreviewAxisColor();
 		this.needsFit = false;
 		this.pendingGeometry = false;

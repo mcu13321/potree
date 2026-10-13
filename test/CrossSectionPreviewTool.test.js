@@ -108,344 +108,30 @@ describe("buildCrossSectionPreviewFrames", () => {
 		expect(frameSideLength).toBeCloseTo(6.6);
 	});
 
-	test("keeps markers visible when representative profile lookup is unavailable", () => {
-		const axisUuid = "axis-1";
-		let didRequestProfile = false;
-		let profileDepth = null;
-		const viewer = {
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			// Geometry fixtures do not need a live camera.
-			setTopView4CameraControls: () => {},
-			renderer: {
-				getSize: (target) => target.set(800, 600),
-				render: () => {},
-			},
-			scene: {
-				getActiveCamera: () => new THREE.PerspectiveCamera(),
-				getBoundingBox: () => new THREE.Box3(
-					new THREE.Vector3(-10, -10, 0),
-					new THREE.Vector3(10, 10, 10),
-				),
-				measurements: [{
-					uuid: axisUuid,
-					getRenderablePaths: () => [{
-						points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0)],
-					}],
-				}],
-				pointclouds: [{
-					baseUrl: "project/main",
-					getPointsInProfile: (_profile, maxDepth) => {
-						didRequestProfile = true;
-						profileDepth = maxDepth;
-						throw new Error("Profile lookup is unavailable");
-					},
-					position: new THREE.Vector3(),
-				}],
-			},
-		};
-		const tool = new CrossSectionPreviewTool(viewer);
 
-		expect(() => tool.setPreview({
-			axisUuid,
-			mainPointCloudBaseUrl: "project/main",
-			sectionEnd: 10,
-			sectionStart: 0,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-		})).not.toThrow();
-		expect(didRequestProfile).toBe(true);
-		expect(profileDepth).toBe(3);
-		expect(tool.group.children.length).toBeGreaterThan(0);
-		tool.dispose();
-	});
-
-	test.each(["bottom", "center"])("refines %s anchored frames and restores the axis color", (axisAnchor) => {
-		const axisUuid = "axis-2";
-		const originalAxisColor = 0x123456;
-		const originalLineColor = 0x654321;
-		let profileCallbacks = null;
-		const axis = {
-			uuid: axisUuid,
-			color: new THREE.Color(originalAxisColor),
-			line: {material: {color: new THREE.Color(originalLineColor)}},
-			getRenderablePaths: () => [{
-				points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0)],
-			}],
-		};
-		const viewer = {
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			// Geometry fixtures do not need a live camera.
-			setTopView4CameraControls: () => {},
-			renderer: {
-				getSize: (target) => target.set(800, 600),
-				render: () => {},
-			},
-			scene: {
-				getActiveCamera: () => new THREE.PerspectiveCamera(),
-				getBoundingBox: () => new THREE.Box3(
-					new THREE.Vector3(-10, -10, 0),
-					new THREE.Vector3(10, 10, 10),
-				),
-				measurements: [axis],
-				pointclouds: [{
-					baseUrl: "project/main",
-					getPointsInProfile: (_profile, _maxDepth, callbacks) => {
-						profileCallbacks = callbacks;
-						return {cancel: () => {}};
-					},
-					position: new THREE.Vector3(),
-				}],
-			},
-		};
-		const tool = new CrossSectionPreviewTool(viewer);
-
-		tool.setPreview({
-			axisAnchor,
-			axisUuid,
-			mainPointCloudBaseUrl: "project/main",
-			sectionEnd: 10,
-			sectionStart: 0,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-		});
-		// Inspect rendered line geometry, not only normalized preview state.
-		const expectAnchorBounds = (sideLength, anchor) => {
-			const geometry = tool.group.children[0].geometry;
-			geometry.computeBoundingBox();
-			expect(geometry.boundingBox.min.z).toBeCloseTo(anchor === "bottom" ? 0 : -sideLength / 2);
-			expect(geometry.boundingBox.max.z).toBeCloseTo(anchor === "bottom" ? sideLength : sideLength / 2);
-		};
-		expectAnchorBounds(10, axisAnchor);
-		expect(tool.frameSideLength).toBeNull();
-		expect(tool.group.children.length).toBeGreaterThan(0);
-		expect(axis.color.getHex()).toBe(0xfacc15);
-		expect(axis.line.material.color.getHex()).toBe(0xfacc15);
-
-		profileCallbacks.onProgress({points: {segments: [{points: {data: {position: new Float32Array([
-			10, -4, 0,
-			10, 4, 0,
-			10, -4, 6,
-			10, 4, 6,
-		])}}}]}});
-		profileCallbacks.onFinish();
-
-		expect(tool.frameSideLength).toBeCloseTo(6.6);
-		expectAnchorBounds(6.6, axisAnchor);
-		expect(tool.group.children.length).toBeGreaterThan(0);
-		expect(tool.group.children[0].material.color.getHex()).toBe(0xf25f5f);
-		expect(tool.group.children[1].material.color.getHex()).toBe(0xef4444);
-		// Changing only the anchor invalidates cached geometry and pending refinement.
-		const shapeKey = tool.previewShapeKey;
-		const nextAnchor = axisAnchor === "bottom" ? "center" : "bottom";
-		tool.setPreview({...tool.preview, axisAnchor: nextAnchor});
-		expect(tool.previewShapeKey).not.toBe(shapeKey);
-		expect(tool.frameSideLength).toBeNull();
-		expectAnchorBounds(10, nextAnchor);
-		tool.clear();
-		expect(axis.color.getHex()).toBe(originalAxisColor);
-		expect(axis.line.material.color.getHex()).toBe(originalLineColor);
-		tool.dispose();
-	});
-
-	test("uses only the axis-owned main point cloud for bounds and local envelope sizing", () => {
-		const axisUuid = "axis-main";
-		let mainCallbacks = null;
-		const requestCounts = {main: 0, other: 0, section: 0};
-		const mainPointcloud = {
-			baseUrl: "project\\main\\",
-			getPointsInProfile: (_profile, _maxDepth, callbacks) => {
-				requestCounts.main++;
-				mainCallbacks = callbacks;
-				return {cancel: () => {}};
-			},
-			position: new THREE.Vector3(),
-		};
-		const otherPointcloud = {
-			baseUrl: "project/other",
-			getPointsInProfile: () => {
-				requestCounts.other++;
-			},
-			position: new THREE.Vector3(),
-		};
-		const sectionPointcloud = {
-			baseUrl: "project/sections/K0+100",
-			getPointsInProfile: () => {
-				requestCounts.section++;
-			},
-			position: new THREE.Vector3(),
-		};
-		const boundingBoxInputs = [];
-		const viewer = {
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			// Geometry fixtures do not need a live camera.
-			setTopView4CameraControls: () => {},
-			renderer: {
-				getSize: (target) => target.set(800, 600),
-				render: () => {},
-			},
-			scene: {
-				getActiveCamera: () => new THREE.PerspectiveCamera(),
-				getBoundingBox: (pointclouds) => {
-					boundingBoxInputs.push(pointclouds);
-					return new THREE.Box3(
-						new THREE.Vector3(-20, -20, 0),
-						new THREE.Vector3(20, 20, 100),
-					);
-				},
-				measurements: [{
-					uuid: axisUuid,
-					getRenderablePaths: () => [{
-						points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(20, 0, 0)],
-					}],
-				}],
-				pointclouds: [otherPointcloud, sectionPointcloud, mainPointcloud],
-			},
-		};
-		const tool = new CrossSectionPreviewTool(viewer);
-
-		tool.setPreview({
-			axisUuid,
-			mainPointCloudBaseUrl: "project/main/",
-			sectionEnd: 20,
-			sectionStart: 0,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-		});
-
-		expect(requestCounts).toEqual({main: 1, other: 0, section: 0});
-		expect(tool.frameSideLength).toBeNull();
-		expect(tool.group.children.length).toBeGreaterThan(0);
-		expect(boundingBoxInputs.length).toBeGreaterThan(0);
-		expect(boundingBoxInputs.every(
-			(pointclouds) => pointclouds.length === 1 && pointclouds[0] === mainPointcloud,
-		)).toBe(true);
-
-		mainCallbacks.onProgress({points: {segments: [{points: {data: {position: new Float32Array([
-			0, -5, 0,
-			0, 5, 0,
-			0, -5, 10,
-			0, 5, 10,
-		])}}}]}});
-		mainCallbacks.onFinish();
-
-		expect(tool.frameSideLength).toBeCloseTo(11);
-		expect(tool.group.children.length).toBeGreaterThan(0);
-		tool.dispose();
-	});
-
-	test("does not borrow an axis or point cloud when the exact preview resources are unavailable", () => {
-		let profileRequests = 0;
-		let boundingBoxRequests = 0;
-		const fallbackAxis = {
-			uuid: "fallback-axis",
-			isCadVector: true,
-			vectorType: "axisLine",
-			color: new THREE.Color(0x123456),
-			getRenderablePaths: () => [{
-				points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(20, 0, 0)],
-			}],
-		};
-		const viewer = {
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			// Geometry fixtures do not need a live camera.
-			setTopView4CameraControls: () => {},
-			renderer: {
-				getSize: (target) => target.set(800, 600),
-				render: () => {},
-			},
-			scene: {
-				getActiveCamera: () => new THREE.PerspectiveCamera(),
-				getBoundingBox: () => {
-					boundingBoxRequests++;
-					return new THREE.Box3(
-						new THREE.Vector3(-10, -10, 0),
-						new THREE.Vector3(10, 10, 10),
-					);
-				},
-				measurements: [fallbackAxis],
-				pointclouds: [{
-					baseUrl: "project/other",
-					getPointsInProfile: () => {
-						profileRequests++;
-					},
-				}],
-			},
-		};
-		const tool = new CrossSectionPreviewTool(viewer);
-
-		tool.setPreview({
-			axisUuid: "missing-axis",
-			mainPointCloudBaseUrl: "project/missing",
-			sectionEnd: 20,
-			sectionStart: 0,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-		});
-
-		expect(profileRequests).toBe(0);
-		expect(boundingBoxRequests).toBe(0);
-		expect(tool.group.children).toHaveLength(0);
-		expect(fallbackAxis.color.getHex()).toBe(0x123456);
-		tool.dispose();
-	});
-
-	test("cancels the previous envelope request when the main point cloud changes", () => {
-		const axisUuid = "axis-switch";
-		let cancelledMainA = 0;
-		let requestedMainB = 0;
-		const viewer = {
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			// Geometry fixtures do not need a live camera.
-			setTopView4CameraControls: () => {},
-			renderer: {
-				getSize: (target) => target.set(800, 600),
-				render: () => {},
-			},
-			scene: {
-				getActiveCamera: () => new THREE.PerspectiveCamera(),
-				getBoundingBox: () => new THREE.Box3(
-					new THREE.Vector3(-10, -10, 0),
-					new THREE.Vector3(10, 10, 10),
-				),
-				measurements: [{
-					uuid: axisUuid,
-					getRenderablePaths: () => [{
-						points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(20, 0, 0)],
-					}],
-				}],
-				pointclouds: [{
-					baseUrl: "project/main-a",
-					getPointsInProfile: () => ({cancel: () => cancelledMainA++}),
-				}, {
-					baseUrl: "project/main-b",
-					getPointsInProfile: () => {
-						requestedMainB++;
-						return {cancel: () => {}};
-					},
-				}],
-			},
-		};
-		const tool = new CrossSectionPreviewTool(viewer);
-		const preview = {
-			axisUuid,
-			sectionEnd: 20,
-			sectionStart: 0,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-		};
-
-		tool.setPreview({...preview, mainPointCloudBaseUrl: "project/main-a"});
-		tool.setPreview({...preview, mainPointCloudBaseUrl: "project/main-b"});
-
-		expect(cancelledMainA).toBe(1);
-		expect(requestedMainB).toBe(1);
-		tool.dispose();
-	});
+  // The parent supplies final size; native rendering must never query a profile.
+  test('waits for final size and preserves it across preview parameter changes', () => {
+    const request = vi.fn(() => { throw new Error('Unexpected network sampling'); });
+    const axis = { uuid: 'axis', color: new THREE.Color(0x123456), getRenderablePaths: () => [{ points: [new THREE.Vector3(), new THREE.Vector3(20, 0, 0)] }] };
+    const cloud = { baseUrl: 'main', getPointsInProfile: request };
+    const viewer = { addEventListener() {}, removeEventListener() {}, setTopView4CameraControls: vi.fn(), scene: {
+      measurements: [axis], pointclouds: [cloud], getBoundingBox: () => new THREE.Box3(new THREE.Vector3(-10, -10, 0), new THREE.Vector3(30, 10, 30)),
+    } };
+    const tool = new CrossSectionPreviewTool(viewer);
+    const preview = { axisUuid: 'axis', mainPointCloudBaseUrl: 'main', sectionStart: 0, sectionEnd: 20, sectionStep: 5, sectionThickness: 0.2 };
+    tool.setPreview(preview);
+    expect(tool.group.children).toHaveLength(0);
+    tool.setPreview({ ...preview, frameSideLength: 6.6 });
+    expect(tool.group.children.length).toBeGreaterThan(0);
+    expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
+    tool.setPreview({ ...preview, sectionStep: 10, frameSideLength: 6.6 });
+    expect(tool.frameSideLength).toBeCloseTo(6.6);
+    expect(request).not.toHaveBeenCalled();
+    tool.clear();
+    expect(axis.color.getHex()).toBe(0x123456);
+    expect(tool.group.children).toHaveLength(0);
+    tool.dispose();
+  });
 
 	test("renders markers in Potree's three-dimensional overlay pass", () => {
 		const source = readFileSync("src/utils/CrossSectionPreviewTool.js", "utf8");
@@ -523,16 +209,15 @@ describe("cross-section preview initialization camera", () => {
 			sectionEnd: 20,
 			sectionStep: 10,
 			sectionThickness: 0.2,
+			frameSideLength: 6.6,
 		};
 		viewer.setTopView4CameraControls(false);
 		const initialPose = controls.getRigidPose();
 		viewer.setTopView4CameraControls.mockClear();
 		return {camera, controls, main, viewer, tool, preview, initialPose,
 			finishProfile: () => {
-				profileCallbacks.onProgress({points: {segments: [{points: {data: {
-					position: new Float32Array([10, -4, 0, 10, 4, 0, 10, -4, 6, 10, 4, 6]),
-				}}}]}});
-				profileCallbacks.onFinish();
+				// A final-size update must preserve user navigation.
+				tool.setPreview({...preview, frameSideLength: 6.6});
 			},
 		};
 	}
