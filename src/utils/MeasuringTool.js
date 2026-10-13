@@ -352,6 +352,16 @@ export class MeasuringTool extends EventDispatcher{
 		};
 		
 		let insertionCallback = (e) => {
+			// Native double/triple clicks emit multiple releases; commit only the first.
+			// Scope this to the four multi-point tools, preserving editing and other tools.
+			if (e.type === "mouseup" && e.button === THREE.MOUSE.LEFT && e.detail > 1 &&
+				["length", "height", "angle", "area"].includes(this.eventMeasurement?.name)) {
+				// InputHandler releases the preview before this callback; resume its hover tracking.
+				if (!this.eventMeasurement.finished) {
+					this.viewer.inputHandler.startDragging(this.eventMeasurement.spheres[this.eventMeasurement.spheres.length - 1]);
+				}
+				return;
+			}
 			let endPosition = this.getEventLocalPosition(e);
 			if (this.mouseDownPosition && endPosition) {
 				const hasMoved = !this.isTapEvent(e, endPosition);

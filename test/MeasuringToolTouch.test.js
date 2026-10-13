@@ -143,3 +143,102 @@ describe("MeasuringTool touch insertion", () => {
 		expect(viewer.inputHandler.startDragging).toHaveBeenCalledTimes(draggingCallCount);
 	});
 });
+
+// Replay native mouse click counts without changing picking, editing, or touch semantics.
+describe("MeasuringTool repeated mouse clicks", () => {
+	let viewer;
+	let tool;
+	const a = new THREE.Vector3(1, 2, 3);
+	const b = new THREE.Vector3(4, 6, 8);
+	const c = new THREE.Vector3(7, 3, 5);
+	const options = (name) => ({name, ...({height: {maxMarkers: 2}, angle: {maxMarkers: 3}, point: {maxMarkers: 1}}[name] || {})});
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		viewer = new MockViewer();
+		tool = new MeasuringTool(viewer);
+		viewer.measuringTool = tool;
+		viewer.inputHandler.getEventLocalPosition.mockReturnValue(new THREE.Vector2(10, 10));
+		viewer.inputHandler.isTapGesture.mockReturnValue(true);
+		viewer.inputHandler.hoveredPoint = {location: a};
+	});
+
+	afterEach(() => {
+		vi.clearAllTimers();
+		vi.useRealTimers();
+		viewer.renderer.domElement.remove();
+	});
+
+	function release(point, detail = 1, button = 0) {
+		// Picking updates the trailing preview before the native mouseup insertion callback.
+		tool.eventMeasurement.points.at(-1).position.copy(point);
+		for (const type of ["mousedown", "mouseup"]) {
+			viewer.renderer.domElement.dispatchEvent(new MouseEvent(type, {button, detail, clientX: 10, clientY: 10}));
+		}
+	}
+
+	for (const name of ["length", "height", "angle", "area"]) {
+		it(`${name} ignores the second and third releases of the same click gesture`, () => {
+			const measure = tool.startInsertion(options(name));
+			release(a, 1);
+			release(a, 2);
+			release(a, 3);
+			expect(measure.points.map(({position}) => position.toArray())).toEqual([a.toArray(), a.toArray()]);
+			expect(measure.finished).toBe(false);
+			expect(viewer.scene.addMeasurement2platform).not.toHaveBeenCalled();
+		});
+	}
+
+	for (const name of ["length", "area"]) {
+		it(`${name} keeps distinct single clicks and right-click completion`, () => {
+			const measure = tool.startInsertion(options(name));
+			release(a);
+			release(b);
+			release(b, 2);
+			if (name === "area") release(c);
+			const committed = name === "area" ? [a, b, c] : [a, b];
+			// A repeated right-button count must not be mistaken for a repeated left click.
+			release(c, 2, 2);
+			expect(measure.points.map(({position}) => position.toArray())).toEqual(committed.map((point) => point.toArray()));
+			expect(viewer.scene.addMeasurement2platform).toHaveBeenCalledExactlyOnceWith(measure);
+		});
+	}
+
+	for (const name of ["height", "angle"]) {
+		it(`${name} completes at the normal point count and does not spill into the next draft`, () => {
+			const measure = tool.startInsertion(options(name));
+			release(a);
+			release(b);
+			if (name === "angle") release(c);
+			expect(viewer.scene.addMeasurement2platform).toHaveBeenCalledExactlyOnceWith(measure);
+			vi.runOnlyPendingTimers();
+			const nextDraft = tool.eventMeasurement;
+			release(c, 2);
+			expect(nextDraft.points).toHaveLength(1);
+			expect(nextDraft.finished).toBe(false);
+			release(a, 1);
+			expect(nextDraft.points).toHaveLength(2);
+		});
+	}
+
+	it("still rejects camera drags and keeps synthetic single clicks", () => {
+		const measure = tool.startInsertion(options("length"));
+		viewer.inputHandler.isTapGesture.mockReturnValue(false);
+		release(a);
+		expect(measure.points).toHaveLength(1);
+		viewer.inputHandler.isTapGesture.mockReturnValue(true);
+		release(a, 0);
+		expect(measure.points).toHaveLength(2);
+	});
+
+	it("leaves single-point and other measurement tools outside the filter", () => {
+		const point = tool.startInsertion(options("point"));
+		release(a, 1);
+		release(a, 2);
+		expect(point.points).toHaveLength(1);
+		const other = tool.startInsertion({name: "custom", maxMarkers: 10});
+		release(a, 1);
+		release(a, 2);
+		expect(other.points).toHaveLength(3);
+	});
+});
