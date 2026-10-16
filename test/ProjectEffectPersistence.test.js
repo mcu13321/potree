@@ -304,3 +304,111 @@ describe("Project effect persistence", () => {
 		expect(viewer.scene.pointclouds).toHaveLength(0);
 	});
 });
+
+import {setPointCloudLabelAppearance} from "../src/utils/PointCloudLabelAppearance.js";
+
+it("saves base effects while label selection is active", () => {
+	globalThis.Potree = {PointSizeType: {FIXED: 0}};
+	const pc = {name: "active", userData: {edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.35}, pcoGeometry: {url: "/cloud.js"}, position: new THREE.Vector3(), rotation: new THREE.Euler(), scale: new THREE.Vector3(1, 1, 1), material: createMockMaterial()};
+	const viewer = createSaveViewer(pc);
+	viewer.getEDLEnabled = () => getPointcloudEffectState(pc).edlEnabled;
+	setPointCloudLabelAppearance(pc, true);
+	try {
+		// Runtime Xray must never replace base EDL, opacity or color mode in a saved project.
+		expect(viewer.getEDLEnabled()).toBe(false);
+		for (const active of [true, false, "secondary"]) {
+			setPointCloudLabelAppearance(pc, active);
+			const saved = saveProject(viewer);
+			expect(saved.settings.edlEnabled).toBe(true);
+			expect(saved.pointclouds[0]).toMatchObject({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.35, material: {activeAttributeName: "rgba"}});
+		}
+		setPointcloudXRAYEnabledForTest(pc, true);
+		const saved = saveProject(viewer);
+		expect(saved.settings.edlEnabled).toBe(false);
+		expect(saved.pointclouds[0].xrayEnabled).toBe(true);
+	} finally {
+		setPointCloudLabelAppearance(pc, null);
+	}
+});
+import {setPointcloudXRAYEnabled as setPointcloudXRAYEnabledForTest} from "../src/viewer/PointcloudEffectUtils.js";
+
+import {PointCloudAlignmentTrackingTool, isAlignmentMatrixManaged, getAlignmentPoseData, captureAlignmentPose, beginAlignmentPose, applyAlignmentLocalMatrix, endAlignmentPose} from "../src/utils/PointCloudAlignmentTransform.js";
+
+// Exercise real project serialization/loading, including Scene changing import-time placement.
+it("excludes previews and round-trips confirmed affine transforms after import defaults", async () => {
+ globalThis.Potree = {PointSizeType: {FIXED: 0}};
+ const pc = new THREE.Object3D();
+ pc.name = "aligned";
+ pc.position.set(12, 23, 34);
+ pc.pcoGeometry = {url: "/aligned/metadata.json"};
+ pc.material = createMockMaterial();
+ const viewer = createSaveViewer(pc);
+ const original = captureAlignmentPose(pc);
+ beginAlignmentPose(pc, original);
+ const matrix = original.matrix.clone();
+ matrix.elements[4] = 0.35;
+ matrix.elements[12] += 9;
+ applyAlignmentLocalMatrix(pc, matrix);
+ const pending = saveProject(viewer);
+ expect(pending.pointclouds[0].position).toEqual([12, 23, 34]);
+ expect(pending.pointclouds[0].alignmentTransform.matrix).toEqual(original.matrix.toArray());
+ endAlignmentPose(pc, true);
+ const saved = saveProject(viewer);
+ expect(saved.pointclouds[0].alignmentTransform.matrix).toEqual(matrix.toArray());
+ const loaded = new THREE.Object3D();
+ loaded.material = {...createMockMaterial(), setRange() {}};
+ globalThis.Potree.loadPointCloud = (_url, _name, callback) => callback({pointcloud: loaded});
+ const destination = Object.assign(new THREE.EventDispatcher(), createLoadViewer());
+ const tracker = new PointCloudAlignmentTrackingTool(destination);
+ const originalAdd = destination.scene.addPointCloud;
+ destination.scene.addPointCloud = function (cloud) {originalAdd.call(this, cloud); cloud.position.set(-999, -999, -999);};
+ await loadProject(destination, saved);
+ expect(loaded.matrix.toArray()).toEqual(matrix.toArray());
+ expect(loaded.matrixAutoUpdate).toBe(false);
+ expect(loaded.position.toArray()).toEqual([21, 23, 34]);
+ tracker.dispose();
+});
+
+it("keeps legacy manual-matrix saving unchanged when alignment never owned the cloud", () => {
+	globalThis.Potree = {PointSizeType: {FIXED: 0}};
+	const pc = new THREE.Object3D();
+	pc.position.set(1, 2, 3);
+	pc.matrixAutoUpdate = false;
+	pc.matrix.makeTranslation(90, 80, 70);
+	pc.pcoGeometry = {url: "/legacy/metadata.json"};
+	pc.material = createMockMaterial();
+	const saved = saveProject(createSaveViewer(pc)).pointclouds[0];
+	expect(saved.position).toEqual([1, 2, 3]);
+	expect(saved.rotation).toEqual(pc.rotation.toArray());
+	expect(saved.scale).toEqual(pc.scale.toArray());
+	expect(saved).not.toHaveProperty("matrix");
+	expect(saved).not.toHaveProperty("alignmentTransform");
+	expect(isAlignmentMatrixManaged(pc)).toBe(false);
+	expect(getAlignmentPoseData(pc).position).toEqual([1, 2, 3]);
+});
+
+it.each([
+	[false, {matrix: new THREE.Matrix4().makeTranslation(90, 80, 70).toArray()}],
+	[false, {alignmentTransform: {version: 1, matrix: new THREE.Matrix4().makeTranslation(90, 80, 70).toArray()}}],
+	[true, {matrix: new THREE.Matrix4().makeTranslation(90, 80, 70).toArray()}],
+	[true, {alignmentTransform: {version: 2, matrix: new THREE.Matrix4().makeTranslation(90, 80, 70).toArray()}}],
+])("preserves legacy project loading unless both tracker and extension version opt in (%s)", async (enabled, extension) => {
+	globalThis.Potree = {PointSizeType: {FIXED: 0}};
+	const original = new THREE.Object3D();
+	original.position.set(1, 2, 3);
+	original.pcoGeometry = {url: "/legacy/metadata.json"};
+	original.material = createMockMaterial();
+	const data = saveProject(createSaveViewer(original));
+	Object.assign(data.pointclouds[0], extension);
+	const loaded = new THREE.Object3D();
+	loaded.material = {...createMockMaterial(), setRange() {}};
+	globalThis.Potree.loadPointCloud = (_url, _name, callback) => callback({pointcloud: loaded});
+	const destination = Object.assign(new THREE.EventDispatcher(), createLoadViewer());
+	const tracker = enabled ? new PointCloudAlignmentTrackingTool(destination) : null;
+	try {
+		await loadProject(destination, data);
+		expect(loaded.position.toArray()).toEqual([1, 2, 3]);
+		expect(loaded.matrixAutoUpdate).toBe(true);
+		expect(isAlignmentMatrixManaged(loaded)).toBe(false);
+	} finally {tracker?.dispose();}
+});

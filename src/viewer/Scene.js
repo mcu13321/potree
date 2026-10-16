@@ -1,3 +1,4 @@
+import {isAlignmentMatrixManaged} from "../utils/PointCloudAlignmentTransform.js";
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {Annotation} from "../Annotation.js";
@@ -189,6 +190,8 @@ export class Scene extends EventDispatcher{
 		}
 
 		pointcloud.position.copy(sourcePosition).add(offset);
+		// Affine alignment matrices keep their linear part when the shared origin changes.
+		if (isAlignmentMatrixManaged(pointcloud) && pointcloud.matrixAutoUpdate === false) pointcloud.matrix.setPosition(pointcloud.position);
 		pointcloud.userData.appliedTransformOffset = offset.clone();
 		pointcloud.userData.offset = offset.clone();
 		pointcloud.updateMatrixWorld(true);

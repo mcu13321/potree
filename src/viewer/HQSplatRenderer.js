@@ -1,3 +1,4 @@
+import {isPointCloudAlignmentHidden} from "../utils/PointCloudLabelAppearance.js";
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {NormalizationMaterial} from "../materials/NormalizationMaterial.js";
 import {NormalizationEDLMaterial} from "../materials/NormalizationEDLMaterial.js";
@@ -263,7 +264,7 @@ export class HQSplatRenderer{
 			viewer.renderer.setRenderTarget(target);
 		}
 		const allPointclouds = viewer.scene.pointclouds;
-		const visiblePointclouds = allPointclouds.filter(pointcloud => pointcloud.visible);
+		const visiblePointclouds = allPointclouds.filter(pointcloud => pointcloud.visible && !isPointCloudAlignmentHidden(pointcloud));
 		const {edlPointclouds, regularPointclouds} = partitionPointcloudsByEDL(
 			visiblePointclouds,
 			viewer.isEDLSupported()

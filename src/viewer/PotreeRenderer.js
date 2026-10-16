@@ -1,3 +1,4 @@
+import {isPointCloudAlignmentHidden} from "../utils/PointCloudLabelAppearance.js";
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource} from "./PointcloudEffectUtils.js";
@@ -85,7 +86,7 @@ export class PotreeRenderer {
 			material.useEDL = false;
 		}
 
-		const visiblePointClouds = this.viewer.scene.pointclouds.filter(pc => pc.visible);
+		const visiblePointClouds = this.viewer.scene.pointclouds.filter(pc => pc.visible && !isPointCloudAlignmentHidden(pc));
 		// 单双点云模式统一由 sourceKind 决定，不再依赖可见数量。
 		const xrayUseDistanceRamp = isGroupPointcloudSource(viewer) ? 0 : 1;
 		

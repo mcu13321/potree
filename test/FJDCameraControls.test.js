@@ -481,6 +481,8 @@ describe("FJDCameraControls", () => {
 		const {camera, domElement, scene} = createOrthographicCameraAndDom();
 		const controls = new FJDCameraControls(camera, domElement);
 		controls.syncFromCameraAndViewTarget(new THREE.Vector3(0, 0, 0));
+		// Explicitly enable the pinch-and-pan gesture; default two-touch behavior is pan-only.
+		controls.touches.two = FJDCameraControls.ACTION.TOUCH_ZOOM_TRUCK;
 
 		const originalOrbitPoint = controls.getTarget(new THREE.Vector3()).clone();
 		const originalPosition = camera.position.clone();

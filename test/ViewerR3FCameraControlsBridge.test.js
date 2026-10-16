@@ -67,6 +67,16 @@ describe("Viewer R3F camera-controls 桥接", () => {
 		({Viewer} = await import("../src/viewer/viewer.js"));
 	});
 
+	// The added view API must leave legacy external-control bridges untouched by default.
+	it("keeps legacy controls unchanged when the host requests default 3D", () => {
+		const controls = createRigidBridgeCapableControls();
+		const viewerLike = {controls};
+		Viewer.prototype.setViewMode.call(viewerLike, "3d");
+		expect(Viewer.prototype.getViewMode.call(viewerLike)).toBe("3d");
+		expect(viewerLike.controls).toBe(controls);
+		expect(viewerLike.viewModeController).toBeUndefined();
+	});
+
 	it("应优先把外部 controls 状态同步到当前激活的兼容 controls", () => {
 		const activeControls = createBridgeCapableControls();
 		const fallbackControls = createBridgeCapableControls();

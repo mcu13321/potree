@@ -1,3 +1,6 @@
+import {PointCloudAlignmentTrackingTool, getPointCloudAlignmentResult, exportPointCloudAlignmentResults} from "../utils/PointCloudAlignmentTransform.js";
+import {PointCloudAlignmentTool} from "../utils/PointCloudAlignmentTool.js";
+import {isPointCloudAlignmentHidden, getAlignmentPointClouds} from "../utils/PointCloudLabelAppearance.js";
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {ClipTask, ClipMethod, CameraMode, LengthUnits, ElevationGradientRepeat} from "../defines.js";
 import {Renderer} from "../PotreeRenderer.js";
@@ -26,6 +29,8 @@ import {MeasureMagnifier} from "../utils/MeasureMagnifier.js";
 import {MeasuringTool} from "../utils/MeasuringTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
+// Passive labels are opt-in and independent of selection tools.
+import {PointCloudLabelTool} from "../utils/PointCloudLabelTool.js";
 import {TreeTagTool} from "../utils/TreeTagTool.js";
 import {CadVectorTool} from "../utils/CadVectorTool.js";
 import {CrossSectionPreviewTool} from "../utils/CrossSectionPreviewTool.js";
@@ -59,6 +64,7 @@ import { ClassificationScheme } from "../materials/ClassificationScheme.js";
 import { VRButton } from '../../libs/three.js/extra/VRButton.js';
 import {FJDCameraControls, ensureFJDCameraControlsInstalled} from "../FJDCameraControlsHost.js";
 import {FJDPotreeControlsAdapter} from "./FJDPotreeControlsAdapter.js";
+import {ViewModeController} from "./ViewModeController.js";
 
 import JSON5 from "../../libs/json5-2.1.3/json5.mjs";
 
@@ -865,7 +871,7 @@ export class Viewer extends EventDispatcher{
 	/** Return whether any visible point cloud needs the offscreen X-ray renderer. */
 	hasVisibleXRAYEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
 		return pointclouds.some((pointcloud) => {
-			return pointcloud?.visible !== false
+			return pointcloud?.visible !== false && !isPointCloudAlignmentHidden(pointcloud)
 				&& getPointcloudEffectState(pointcloud, this.isEDLSupported()).xrayEnabled;
 		});
 	};
@@ -1301,6 +1307,102 @@ export class Viewer extends EventDispatcher{
 		}
 	}
 	
+	/** Enable axis views only when explicitly requested by the host. */
+	setViewMode(mode, options = {}){
+		if(mode === "3d" && !this.viewModeController) return;
+		this.viewModeController ??= new ViewModeController(this);
+		this.viewModeController.setMode(mode, options);
+	}
+
+	/** Report unrestricted 3D for Viewers that never opted into axis views. */
+	getViewMode(){
+		return this.viewModeController?.mode ?? "3d";
+	}
+
+	/** Reset framing in the current mode without releasing its axis constraint. */
+	fitViewMode(options = {}){
+		this.viewModeController ??= new ViewModeController(this);
+		return this.viewModeController.fit(options);
+	}
+
+	/** Capture public mode state using the core's array-safe rigid pose representation. */
+	captureViewModeState(){
+		// A temporary tool session must capture a settled axis pose, not a frame between modes.
+		this.viewModeController?.finishTransition();
+		return {
+			mode: this.getViewMode(),
+			cameraMode: this.scene.cameraMode,
+			pose: this.fjdCameraControls.getRigidPose(false),
+		};
+	}
+
+	/** Restore temporary tool sessions without losing large world-coordinate values. */
+	restoreViewModeState(state){
+		if(!state) return;
+		this.setCameraMode(state.cameraMode);
+		this.setViewMode(state.mode, {animate: false});
+		this.fjdCameraControls.setRigidPose(state.pose, false);
+	}
+
+	/** Enable passive center labels only when requested by the host. */
+	enablePointCloudLabels(){
+		if (!this.pointCloudLabelTool || this.pointCloudLabelTool.disposed) {
+			this.pointCloudLabelTool = new PointCloudLabelTool(this);
+		}
+		return this.pointCloudLabelTool;
+	}
+
+	/** Release the label tool without changing point clouds or other tools. */
+	disablePointCloudLabels(){
+		this.pointCloudLabelTool?.dispose();
+		this.pointCloudLabelTool = null;
+	}
+	/** Start a session only when an existing label selection identifies a scene member. */
+	enablePointCloudAlignment(){
+		if (this.pointCloudAlignmentTool && !this.pointCloudAlignmentTool.disposed) return this.pointCloudAlignmentTool;
+		const primary = this.pointCloudLabelTool?.getActivePointCloud();
+		if (!primary || !this.scene.pointclouds.includes(primary)) return null;
+		const tool = new PointCloudAlignmentTool(this);
+		this.pointCloudAlignmentTool = tool;
+		tool.dispatchState();
+		return tool;
+	}
+
+	/** Roll back an unconfirmed alignment without changing camera pose; the host owns reset actions. */
+	disablePointCloudAlignment(){
+		this.pointCloudAlignmentTool?.dispose();
+		this.pointCloudAlignmentTool = null;
+	}
+
+	/** Opt into loading-pose tracking before loading clouds; existing members start at their current pose. */
+	enablePointCloudAlignmentTracking(){
+		if (!this.pointCloudAlignmentTrackingTool || this.pointCloudAlignmentTrackingTool.disposed) {
+			this.pointCloudAlignmentTrackingTool = new PointCloudAlignmentTrackingTool(this);
+		}
+		return this.pointCloudAlignmentTrackingTool;
+	}
+
+	/** Cancel previews before releasing the tracking tool's records and subscriptions. */
+	disablePointCloudAlignmentTracking(){
+		this.disablePointCloudAlignment();
+		this.pointCloudAlignmentTrackingTool?.dispose();
+		this.pointCloudAlignmentTrackingTool = null;
+	}
+
+	/** Return a defensive confirmed result for a member of the current scene. */
+	getPointCloudAlignmentResult(pointcloud){
+		if (!this.pointCloudAlignmentTrackingTool || this.pointCloudAlignmentTrackingTool.disposed) throw new Error("Enable point-cloud alignment tracking before querying results");
+		if (!this.scene.pointclouds.includes(pointcloud)) throw new RangeError("Point cloud must belong to the current scene");
+		return getPointCloudAlignmentResult(pointcloud);
+	}
+
+	/** Export every scene member, including hidden and unmodified point clouds. */
+	exportPointCloudAlignmentResults(){
+		if (!this.pointCloudAlignmentTrackingTool || this.pointCloudAlignmentTrackingTool.disposed) throw new Error("Enable point-cloud alignment tracking before exporting results");
+		return exportPointCloudAlignmentResults(this.scene.pointclouds);
+	}
+	// END point-cloud label API
+
 	setTopView(){
 		this.scene.view.yaw = 0;
 		this.scene.view.pitch = -Math.PI / 2;
@@ -2253,7 +2355,7 @@ export class Viewer extends EventDispatcher{
 		
 		const scene = this.scene;
 		const camera = scene.getActiveCamera();
-		const visiblePointClouds = this.scene.pointclouds.filter(pc => pc.visible)
+		const visiblePointClouds = this.scene.pointclouds.filter(pc => pc.visible && !isPointCloudAlignmentHidden(pc))
 		
 		Potree.pointLoadLimit = Potree.pointBudget * 2;
 
@@ -2304,7 +2406,7 @@ export class Viewer extends EventDispatcher{
 		}
 
 		if (!this.freeze) {
-			let result = Potree.updatePointClouds(scene.pointclouds, camera, this.renderer);
+			let result = Potree.updatePointClouds(getAlignmentPointClouds(scene.pointclouds), camera, this.renderer);
 
 
 			// DEBUG - ONLY DISPLAY NODES THAT INTERSECT MOUSE

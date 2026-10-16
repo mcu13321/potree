@@ -146,3 +146,31 @@ describe("PointcloudEffectUtils", () => {
 		expect(isGroupPointcloudSource(viewer, pointcloud)).toBe(false);
 	});
 });
+
+import {setPointCloudLabelAppearance} from "../src/utils/PointCloudLabelAppearance.js";
+
+describe("label appearance effect priority", () => {
+	it("overrides reads without persisting transient selection through normalization or setters", () => {
+		// Latest base preferences survive both active and inactive rendering overrides.
+		const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
+		// Both alignment roles use Xray while base preferences remain unchanged.
+		setPointCloudLabelAppearance(pc, "secondary");
+		expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: true, xrayOpacity: 0.25});
+		setPointcloudEDLEnabled(pc, true);
+		expect(pc.userData).toMatchObject({edlEnabled: true, xrayEnabled: false});
+		setPointCloudLabelAppearance(pc, false);
+		expect(hasVisibleEDLEffect([pc])).toBe(false);
+		expect(partitionPointcloudsByEDL([pc])).toEqual({edlPointclouds: [], regularPointclouds: [pc]});
+		setPointcloudXRAYEnabled(pc, true);
+		expect(getPointcloudEffectState(pc).xrayEnabled).toBe(false);
+		expect(pc.userData.xrayEnabled).toBe(true);
+		// Both selected roles enable Xray while serialization keeps the base preferences.
+		for (const role of [true, "secondary"]) {
+			setPointCloudLabelAppearance(pc, role);
+			expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: true});
+			expect(getPointcloudEffectState(pc, true, false).xrayEnabled).toBe(true);
+		}
+		setPointCloudLabelAppearance(pc, null);
+		expect(getPointcloudEffectState(pc).xrayEnabled).toBe(true);
+	});
+});

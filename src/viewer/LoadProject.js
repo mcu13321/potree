@@ -1,3 +1,4 @@
+import {loadAlignmentPoseMatrix, isPointCloudAlignmentTrackingEnabled} from "../utils/PointCloudAlignmentTransform.js";
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {Annotation} from "../Annotation.js";
@@ -115,6 +116,8 @@ function loadPointCloud(viewer, data){
 					}
 
 					viewer.scene.addPointCloud(pointcloud);
+					// Restore optional exact transforms after Scene applies its normal import defaults.
+					if (isPointCloudAlignmentTrackingEnabled(viewer.scene)) loadAlignmentPoseMatrix(pointcloud, data, true);
 
 					resolveOnce(pointcloud);
 				}catch(error){

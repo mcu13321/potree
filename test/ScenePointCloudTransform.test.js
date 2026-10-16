@@ -1,3 +1,4 @@
+import {PointCloudAlignmentTrackingTool, getPointCloudAlignmentResult, applyAlignmentLocalMatrix, beginAlignmentPose, captureAlignmentPose, endAlignmentPose} from "../src/utils/PointCloudAlignmentTransform.js";
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {describe, expect, it, vi} from "vitest";
 import {Scene} from "../src/viewer/Scene.js";
@@ -137,4 +138,48 @@ describe("Scene.addPointCloud R3F transform", () => {
 		expect(events).toHaveLength(1);
 		expect(events[0].reason).toBe("multi-to-single");
 	});
+});
+
+import {applyAlignmentLocalMatrix, captureAlignmentPose, endAlignmentPose} from "../src/utils/PointCloudAlignmentTransform.js";
+
+// Shared-origin reconciliation must retain both committed displacement and the affine linear part.
+it("keeps committed alignment matrices across visibility-driven shared-origin changes", () => {
+	const scene = new Scene();
+	const a = createPointcloud(), b = createPointcloud({position: new THREE.Vector3(200, 300, 80)});
+	scene.addPointCloud(a);
+	scene.addPointCloud(b);
+	const matrix = captureAlignmentPose(a).matrix;
+	matrix.elements[12] += 17;
+	matrix.elements[4] += 0.2;
+	applyAlignmentLocalMatrix(a, matrix);
+	endAlignmentPose(a, true);
+	const originalSource = a.userData.sourcePosition.clone();
+	const offset = scene.getPointCloudCoordinateOffset().add(new THREE.Vector3(31, 42, 53));
+	scene.rebasePointCloudCoordinateOffset(offset, "alignment-test");
+	expect(a.position.toArray()).toEqual(originalSource.add(offset).toArray());
+	expect(a.matrix.elements[4]).toBeCloseTo(0.2, 10);
+	expect(a.matrix.elements[12]).toBe(a.position.x);
+	expect(a.matrixAutoUpdate).toBe(false);
+});
+
+it("records initial poses after placement and before callbacks without resetting re-added members", () => {
+	const scene = new Scene();
+	const host = Object.assign(new THREE.EventDispatcher(), {scene});
+	const tracker = new PointCloudAlignmentTrackingTool(host);
+	const cloud = createPointcloud();
+	let first;
+	// The host can query the loading pose synchronously from its addition callback.
+	scene.addEventListener("pointcloud_added", () => { first = getPointCloudAlignmentResult(cloud); });
+	scene.addPointCloud(cloud);
+	expect(first.initial.position).toEqual(cloud.position.toArray());
+	expect(first.deltaMatrix).toEqual(new THREE.Matrix4().toArray());
+	const initial = first.initial.matrix;
+	beginAlignmentPose(cloud, captureAlignmentPose(cloud));
+	applyAlignmentLocalMatrix(cloud, new THREE.Matrix4().makeTranslation(5, 0, 0).multiply(cloud.matrix));
+	endAlignmentPose(cloud, true);
+	scene.removePointCloud(cloud);
+	scene.addPointCloud(cloud, false);
+	expect(getPointCloudAlignmentResult(cloud).initial.matrix).toEqual(initial);
+	expect(getPointCloudAlignmentResult(cloud).deltaMatrix[12]).toBeCloseTo(5);
+	tracker.dispose();
 });

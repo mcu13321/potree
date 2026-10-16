@@ -4,6 +4,7 @@
  * @returns {Object}
  */
 import * as THREE from "../../libs/three.js/build/three.module.js";
+import {getPointCloudLabelAppearance, isPointCloudAlignmentHidden} from "../utils/PointCloudLabelAppearance.js";
 
 /**
  * 统一读取运行时注入的点云来源模式，避免各处重复处理优先级与兜底。
@@ -49,7 +50,7 @@ export function ensurePointcloudEffectUserData(pointcloud) {
  * @param {boolean} edlSupported
  * @returns {{userData: Object, edlEnabled: boolean, xrayEnabled: boolean, xrayOpacity: number}}
  */
-export function getPointcloudEffectState(pointcloud, edlSupported = true) {
+function getPointcloudBaseEffectState(pointcloud, edlSupported = true) {
 	const userData = ensurePointcloudEffectUserData(pointcloud);
 	const edlEnabled = Boolean(userData.edlEnabled) && Boolean(edlSupported);
 	const xrayEnabled = Boolean(userData.xrayEnabled) && !edlEnabled;
@@ -74,7 +75,8 @@ export function getPointcloudEffectState(pointcloud, edlSupported = true) {
  * @returns {{userData: Object, edlEnabled: boolean, xrayEnabled: boolean, xrayOpacity: number}}
  */
 export function normalizePointcloudEffectState(pointcloud, edlSupported = true) {
-	const state = getPointcloudEffectState(pointcloud, edlSupported);
+	// Normalize only base preferences; selection overrides are read-only.
+	const state = getPointcloudBaseEffectState(pointcloud, edlSupported);
 
 	state.userData.edlEnabled = state.edlEnabled;
 	state.userData.xrayEnabled = state.xrayEnabled;
@@ -199,7 +201,7 @@ export function applyViewerEffectDefaults(viewer, pointcloud, edlSupported = tru
  */
 export function hasVisibleEDLEffect(pointclouds, edlSupported = true) {
 	return pointclouds.some((pointcloud) => {
-		if (pointcloud.visible === false) {
+		if (pointcloud.visible === false || isPointCloudAlignmentHidden(pointcloud)) {
 			return false;
 		}
 
@@ -246,3 +248,18 @@ export function partitionPointcloudsByEDL(pointclouds, edlSupported = true) {
 		regularPointclouds,
 	};
 }
+
+// BEGIN point-cloud label effect resolver
+/** Resolve transient selection above the latest saved effect preferences. */
+export function getPointcloudEffectState(pointcloud, edlSupported = true, applyLabelAppearance = true) {
+	const state = getPointcloudBaseEffectState(pointcloud, edlSupported);
+	// Serialization opts out; effect normalization already reads only the base state.
+	const active = applyLabelAppearance ? getPointCloudLabelAppearance(pointcloud) : undefined;
+	if (active !== undefined) {
+		state.edlEnabled = false;
+		// Both selected roles use Xray without changing their saved effect preferences.
+		state.xrayEnabled = active === true || active === "secondary";
+	}
+	return state;
+}
+// END point-cloud label effect resolver

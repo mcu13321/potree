@@ -304,3 +304,42 @@ describe("XraySplatPipeline", () => {
 		expect(pipeline.frontTarget).toBeNull();
 	});
 });
+
+import {Renderer as LabelColorRenderer} from "../src/PotreeRenderer.js";
+import {setPointCloudLabelAppearance} from "../src/utils/PointCloudLabelAppearance.js";
+
+describe("active label appearance in the Xray pipeline", () => {
+	it("uses blue and yellow in both front and accumulation draws without leaking into source settings", () => {
+		const {pipeline, viewer} = createPipelineHarness();
+		const pointcloud = createPointcloud();
+		const source = pointcloud.material;
+		const originalColor = source.color.clone();
+		pipeline.frontMaterials.set(pointcloud, createPassMaterial());
+		pipeline.accumulationMaterials.set(pointcloud, createPassMaterial());
+		let expectedColor;
+		// Exercise the actual draw wrapper beneath both real pipeline invocations.
+		const lowLevel = Object.create(LabelColorRenderer.prototype);
+		lowLevel.renderOctreeWithoutLabelAppearance = vi.fn(() => {
+			expect(pointcloud.material.activeAttributeName).toBe("color");
+			expect(pointcloud.material.color.getHex()).toBe(expectedColor);
+		});
+		viewer.pRenderer.render.mockImplementation((_scene, camera, target, params) => {
+			lowLevel.renderOctree(pointcloud, [], camera, target, params);
+		});
+		try {
+			// Exercise both roles through the complete two-pass pipeline.
+			for (const [role, color] of [[true, 0x0088ff], ["secondary", 0xffd400]]) {
+			setPointCloudLabelAppearance(pointcloud, role);
+			expectedColor = color;
+			pipeline.renderToTargets({pointclouds: [pointcloud], originalMaterials: new Map([[pointcloud, source]]), camera: {position: new THREE.Vector3(10, 10, 10)}, width: 800, height: 600});
+			expect(lowLevel.renderOctreeWithoutLabelAppearance).toHaveBeenCalledTimes(role === true ? 2 : 4);
+			}
+			expect(pointcloud.material).toBe(source);
+			expect(source.activeAttributeName).toBe("rgba");
+			expect(source.color.equals(originalColor)).toBe(true);
+		} finally {
+			setPointCloudLabelAppearance(pointcloud, null);
+			pipeline.dispose();
+		}
+	});
+});

@@ -1,4 +1,6 @@
+import {getAlignmentPoseData} from "../utils/PointCloudAlignmentTransform.js";
 
+import {getPointCloudLabelAppearance} from "../utils/PointCloudLabelAppearance.js";
 import {getPointcloudEffectState} from "./PointcloudEffectUtils.js";
 
 
@@ -29,7 +31,8 @@ function createPointcloudData(pointcloud) {
 	}
 
 	let pointSizeTypeName = Object.entries(Potree.PointSizeType).find(e => e[1] === material.pointSizeType)[0];
-	const effectState = getPointcloudEffectState(pointcloud, true);
+	// Persist base settings rather than temporary label-selection appearance.
+	const effectState = getPointcloudEffectState(pointcloud, true, false);
 
 	let jsonMaterial = {
 		activeAttributeName: material.activeAttributeName,
@@ -43,9 +46,8 @@ function createPointcloudData(pointcloud) {
 	const pcdata = {
 		name: pointcloud.name,
 		url: pointcloud.pcoGeometry.url,
-		position: pointcloud.position.toArray(),
-		rotation: pointcloud.rotation.toArray(),
-		scale: pointcloud.scale.toArray(),
+		// Serialize entry poses during previews and confirmed affine matrices afterwards.
+		...getAlignmentPoseData(pointcloud),
 		material: jsonMaterial,
 		// 点云效果状态需要随项目一起持久化，保证重新加载后视觉一致。
 		edlEnabled: effectState.edlEnabled,
@@ -213,7 +215,8 @@ function createSettingsData(viewer){
 	return {
 		pointBudget: viewer.getPointBudget(),
 		fov: viewer.getFOV(),
-		edlEnabled: viewer.getEDLEnabled(),
+		// Persist global base EDL semantics without the transient selection overlay.
+		edlEnabled: viewer.scene.pointclouds.some(pc => getPointCloudLabelAppearance(pc) !== undefined) ? viewer.scene.pointclouds.every(pc => getPointcloudEffectState(pc, viewer.isEDLSupported?.() ?? true, false).edlEnabled) : viewer.getEDLEnabled(),
 		edlRadius: viewer.getEDLRadius(),
 		edlStrength: viewer.getEDLStrength(),
 		background: viewer.getBackground(),

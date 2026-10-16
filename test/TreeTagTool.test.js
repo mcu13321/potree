@@ -1,6 +1,8 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { TreeTagTool } from "../src/utils/TreeTagTool.js";
+import {applyViewerEffectDefaults, getPointcloudEffectState} from "../src/viewer/PointcloudEffectUtils.js";
+import {setPointCloudLabelAppearance} from "../src/utils/PointCloudLabelAppearance.js";
 import { TreeTag } from "../src/utils/TreeTag.js";
 import { EventDispatcher } from "../src/EventDispatcher.js";
 import { Utils } from "../src/utils.js";
@@ -91,6 +93,8 @@ class MockViewer extends EventDispatcher {
 			render: vi.fn(),
 		};
 		this.isEDLSupported = vi.fn(() => edlSupported);
+		// Single-source tools call the same effect-default API as a real Viewer.
+		this.applyPointcloudEffectDefaults = pc => applyViewerEffectDefaults(this, pc, edlSupported);
 
 		Object.defineProperty(this.renderer.domElement, "clientWidth", { value: 800 });
 		Object.defineProperty(this.renderer.domElement, "clientHeight", { value: 600 });
@@ -489,12 +493,37 @@ describe("TreeTagTool", () => {
 		);
 		expect(viewer.renderer.render).toHaveBeenCalledWith(
 			tool.scene,
-			viewer.scene.getActiveCamera(),
-			tool.tagRenderTarget
+			viewer.scene.getActiveCamera()
 		);
+		// Three renders to the bound target rather than a third render argument.
+		expect(viewer.renderer.setRenderTarget).toHaveBeenCalledWith(tool.tagRenderTarget);
 		expect(screenPassSpy).toHaveBeenCalledWith(
 			viewer.renderer,
 			tool.compositeMaterial
 		);
 	});
+});
+
+it("label selection survives TreeTag effect updates", () => {
+	const viewer = new MockViewer(new MockScene(), true, "group");
+	const tool = new TreeTagTool(viewer);
+	const active = createMockPointcloud("active"), inactive = createMockPointcloud("inactive");
+	viewer.scene.addPointCloud(active);
+	viewer.scene.addPointCloud(inactive);
+	setPointCloudLabelAppearance(active, true);
+	setPointCloudLabelAppearance(inactive, false);
+	try {
+		// TreeTag updates base preferences while label selection Xray retains priority.
+		tool.setHighlightedPointclouds([inactive]);
+		expect(getPointcloudEffectState(active)).toMatchObject({edlEnabled: false, xrayEnabled: true});
+		expect(getPointcloudEffectState(inactive)).toMatchObject({edlEnabled: false, xrayEnabled: false});
+		setPointCloudLabelAppearance(active, null);
+		setPointCloudLabelAppearance(inactive, null);
+		expect(getPointcloudEffectState(inactive).edlEnabled).toBe(true);
+	} finally {
+		setPointCloudLabelAppearance(active, null);
+		setPointCloudLabelAppearance(inactive, null);
+		tool.dispose();
+		cleanupViewer(viewer);
+	}
 });

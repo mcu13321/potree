@@ -378,3 +378,103 @@ describe("Render effect routing", () => {
 	});
 
 });
+
+import {setPointCloudLabelAppearance, setPointCloudAlignmentHidden, getAlignmentPointClouds} from "../src/utils/PointCloudLabelAppearance.js";
+
+describe("label tint at the actual octree draw boundary", () => {
+	it("tints color and cached pass materials for both roles, restoring source state after a failed draw", () => {
+		const renderer = new PotreeGLRenderer(createRendererMock());
+		const pc = createPointcloud("active");
+		pc.material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456)};
+		setPointCloudLabelAppearance(pc, true);
+		const pass = {activeAttributeName: "intensity", color: new THREE.Color(0xabcdef)};
+		let expectedRoleColor = 0x0088ff;
+		const draw = vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation((_cloud, _nodes, _camera, _target, params) => {
+			const material = params.material || pc.material;
+			expect(material.activeAttributeName).toBe("color");
+			expect(material.color.getHex()).toBe(expectedRoleColor);
+			throw new Error("Draw failed");
+		});
+		// Solid role tints apply to regular and cached draw materials alike.
+		for (const [role, color] of [[true, 0x0088ff], ["secondary", 0xffd400]]) {
+			setPointCloudLabelAppearance(pc, role);
+			expectedRoleColor = color;
+			for (const material of [pc.material, pass]) {
+				const attribute = material.activeAttributeName, color = material.color.clone();
+				expect(() => renderer.renderOctree(pc, [], createCamera(), null, {material})).toThrow("Draw failed");
+				expect(material.activeAttributeName).toBe(attribute);
+				expect(material.color.equals(color)).toBe(true);
+			}
+		}
+		expect(draw).toHaveBeenCalledTimes(4);
+		setPointCloudLabelAppearance(pc, null);
+	});
+
+	it("leaves picking and high-quality/standard depth passes unchanged", () => {
+		const renderer = new PotreeGLRenderer(createRendererMock());
+		const pc = createPointcloud("active");
+		setPointCloudLabelAppearance(pc, true);
+		for (const mode of [{activeAttributeName: "indices"}, {activeAttributeName: "depth"}, {activeAttributeName: null, defines: new Map([["depth_pass", "#define hq_depth_pass"]])}]) {
+			const material = {...mode, color: new THREE.Color(0x123456)};
+			vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation(() => {
+				expect(material.activeAttributeName).toBe(mode.activeAttributeName);
+				expect(material.color.getHex()).toBe(0x123456);
+			});
+			renderer.renderOctree(pc, [], createCamera(), null, {material});
+		}
+		setPointCloudLabelAppearance(pc, null);
+	});
+
+	it("routes both selected roles to Xray and inactive EDL clouds to ordinary rendering", () => {
+		const active = createPointcloud("active", {xrayEnabled: true});
+		const inactive = createPointcloud("inactive", {edlEnabled: true});
+		setPointCloudLabelAppearance(active, true);
+		setPointCloudLabelAppearance(inactive, false);
+		const renderer = new EDLRenderer(createViewerForEffectRender([active, inactive]));
+		expect(renderer._getPointcloudGroups([active, inactive])).toEqual({edlPointclouds: [], regularPointclouds: [active, inactive]});
+		// Both roles enable Xray without changing the stored preference.
+		for (const role of [true, "secondary"]) {
+			setPointCloudLabelAppearance(active, role);
+			renderer._configureRegularPointclouds([active, inactive], createCamera(), false);
+			expect(active.material.useXRAY).toBe(true);
+			expect(inactive.material.useXRAY).toBe(false);
+			expect(active.material.useEDL).toBe(false);
+			expect(inactive.material.useEDL).toBe(false);
+		}
+		expect(active.userData.xrayEnabled).toBe(true);
+		setPointCloudLabelAppearance(active, null);
+		setPointCloudLabelAppearance(inactive, null);
+	});
+});
+
+// Runtime hiding must protect direct picking draws as well as scene traversal.
+it("suppresses hidden alignment clouds without writing their visible flag", () => {
+ const renderer = new PotreeGLRenderer(createRendererMock());
+ const pc = new PointCloudTree();
+ const other = new PointCloudTree();
+ const scene = new THREE.Scene();
+ scene.add(pc, other);
+ const draw = vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation(() => {});
+ setPointCloudAlignmentHidden(pc, true);
+ expect(renderer.traverse(scene).octrees).toEqual([other]);
+ expect(renderer.traverse(pc).octrees).toEqual([]);
+ renderer.renderOctree(pc, [], createCamera(), null, {});
+ expect(draw).not.toHaveBeenCalled();
+ expect(pc.visible).toBe(true);
+ setPointCloudAlignmentHidden(pc, false);
+ expect(renderer.traverse(scene).octrees).toContain(pc);
+ renderer.renderOctree(pc, [], createCamera(), null, {});
+ expect(draw).toHaveBeenCalledTimes(1);
+});
+
+// Default LOD updates must retain the same array passed by legacy viewers.
+it("keeps the original LOD array until an alignment cloud is hidden", () => {
+	const a = new THREE.Object3D(), b = new THREE.Object3D(), clouds = [a, b];
+	expect(getAlignmentPointClouds(clouds)).toBe(clouds);
+	setPointCloudAlignmentHidden(a, true);
+	try {
+		expect(getAlignmentPointClouds(clouds)).toEqual([b]);
+		expect(clouds).toEqual([a, b]);
+	} finally {setPointCloudAlignmentHidden(a, false);}
+	expect(getAlignmentPointClouds(clouds)).toBe(clouds);
+});

@@ -60,6 +60,8 @@ export * from "./utils/Volume.js";
 export * from "./utils/VolumeTool.js";
 export * from "./utils/TreeTag.js";
 export * from "./utils/TreeTagTool.js";
+// Expose the standalone passive label tool to hosts.
+export {PointCloudLabelTool} from "./utils/PointCloudLabelTool.js";
 export * from "./utils/CadVector.js";
 export * from "./utils/CadVectorTool.js";
 export * from "./utils/CrossSectionPreviewTool.js";
@@ -346,3 +348,9 @@ export function loadPointCloud(path, name, callback, getUrl){
 
 // Expose the reusable box tool without enabling it for existing viewers.
 export { BoxClippingTool } from "./utils/BoxClippingTool.js";
+
+// Alignment selection is a standalone, host-enabled tool.
+export {PointCloudAlignmentTool} from "./utils/PointCloudAlignmentTool.js";
+
+// Hosts can own the loading-baseline tracker independently of labels or alignment sessions.
+export {PointCloudAlignmentTrackingTool} from "./utils/PointCloudAlignmentTransform.js";

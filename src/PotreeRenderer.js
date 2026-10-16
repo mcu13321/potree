@@ -1,5 +1,6 @@
 
 import * as THREE from "../libs/three.js/build/three.module.js";
+import {withPointCloudLabelColor, isPointCloudAlignmentHidden} from "./utils/PointCloudLabelAppearance.js";
 import {PointCloudTree} from "./PointCloudTree.js";
 import {PointCloudOctreeNode} from "./PointCloudOctree.js";
 import {PointCloudArena4DNode} from "./arena4d/PointCloudArena4D.js";
@@ -675,6 +676,8 @@ export class Renderer {
 		while (stack.length > 0) {
 
 			let node = stack.pop();
+			// Runtime hiding also applies when traversing an explicitly supplied point-cloud root.
+			if (isPointCloudAlignmentHidden(node)) continue;
 
 			if (node instanceof PointCloudTree) {
 				octrees.push(node);
@@ -1041,7 +1044,18 @@ export class Renderer {
 		}
 	}
 
+	// BEGIN point-cloud label render wrapper
+	/** Keep label tint local to this draw, including failures and offscreen passes. */
 	renderOctree(octree, nodes, camera, target, params = {}){
+		// Direct picking bypasses traversal, so guard the draw boundary as well.
+		if (isPointCloudAlignmentHidden(octree)) return;
+		const material = params.material || octree.material;
+		return withPointCloudLabelColor(octree, material, () =>
+			this.renderOctreeWithoutLabelAppearance(octree, nodes, camera, target, params));
+	}
+	// END point-cloud label render wrapper
+
+	renderOctreeWithoutLabelAppearance(octree, nodes, camera, target, params = {}){
 
 		let gl = this.gl;
 
