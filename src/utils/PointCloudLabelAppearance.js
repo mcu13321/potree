@@ -5,6 +5,8 @@ const pointCloudLabelAppearances = new WeakMap();
 const activePointCloudLabelColor = new THREE.Color(0x0088ff);
 const secondaryPointCloudLabelColor = new THREE.Color(0xffd400);
 const alignmentHiddenPointClouds = new WeakSet();
+// Independent owners prevent one temporary tool from clearing another tool's visibility.
+const stationHiddenPointClouds = new WeakMap();
 
 /** Register active/inactive appearance, or remove this tool's override with null. */
 export function setPointCloudLabelAppearance(pointcloud, active) {
@@ -49,5 +51,23 @@ export function isPointCloudAlignmentHidden(pointcloud) {
 
 /** Keep legacy LOD input identity and allocation behavior when no cloud is alignment-hidden. */
 export function getAlignmentPointClouds(pointclouds) {
-	return pointclouds.some(isPointCloudAlignmentHidden) ? pointclouds.filter(cloud => !isPointCloudAlignmentHidden(cloud)) : pointclouds;
+	// Preserve the original array when neither optional workflow owns a visibility mask.
+	return pointclouds.some(isPointCloudRuntimeHidden) ? pointclouds.filter(cloud => !isPointCloudRuntimeHidden(cloud)) : pointclouds;
+}
+
+/** Add or release a station-view mask owned by one tool instance. */
+export function setPointCloudStationHidden(pointcloud, owner, hidden) {
+	let owners = stationHiddenPointClouds.get(pointcloud);
+	if (hidden) {
+		if (!owners) stationHiddenPointClouds.set(pointcloud, owners = new Set());
+		owners.add(owner);
+	} else if (owners) {
+		owners.delete(owner);
+		if (!owners.size) stationHiddenPointClouds.delete(pointcloud);
+	}
+}
+
+/** Share transient visibility across drawing, picking, LOD and label projection. */
+export function isPointCloudRuntimeHidden(pointcloud) {
+	return isPointCloudAlignmentHidden(pointcloud) || stationHiddenPointClouds.has(pointcloud);
 }

@@ -195,7 +195,8 @@ export class ViewModeController {
 
 	/** Preserve legacy visibility fallback without changing point-cloud coordinates. */
 	getBounds() {
-		const clouds = this.viewer.scene.pointclouds;
+		// Fit isolated stations in every axis view without affecting ordinary framing.
+		const clouds = this.viewer.pointCloudStationViewTool?.getPointClouds() ?? this.viewer.scene.pointclouds;
 		const visible = clouds.filter((cloud) => cloud.visible !== false);
 		return this.viewer.getBoundingBox(visible.length ? visible : clouds);
 	}

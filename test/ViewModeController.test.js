@@ -63,6 +63,21 @@ function advance(viewer, count = 30) {
 }
 
 describe("opt-in Viewer axis modes", () => {
+ // An explicitly isolated target controls every fit; ordinary framing resumes after release.
+ it("fits only the inspected station across all supported view modes", () => {
+  const {viewer} = createViewer();
+  const target = {}, other = {};
+  viewer.scene.pointclouds = [target, other];
+  viewer.pointCloudStationViewTool = {getPointClouds: () => [target]};
+  for (const mode of ["top", "front", "left", "right", "back", "3d"]) {
+   viewer.setViewMode(mode, {animate: false});
+   viewer.fitViewMode();
+   expect(viewer.getBoundingBox.mock.calls.at(-1)[0]).toEqual([target]);
+  }
+  viewer.pointCloudStationViewTool = null;
+  viewer.setViewMode("front", {animate: false});
+  expect(viewer.getBoundingBox.mock.calls.at(-1)[0]).toEqual([target, other]);
+ });
 	beforeAll(async () => {
 		vi.stubGlobal("proj4", {defs: vi.fn()});
 		({Viewer} = await import("../src/viewer/viewer.js"));

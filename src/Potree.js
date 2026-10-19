@@ -354,3 +354,6 @@ export {PointCloudAlignmentTool} from "./utils/PointCloudAlignmentTool.js";
 
 // Hosts can own the loading-baseline tracker independently of labels or alignment sessions.
 export {PointCloudAlignmentTrackingTool} from "./utils/PointCloudAlignmentTransform.js";
+
+// Station inspection is exported without allocating a tool in ordinary Viewers.
+export {PointCloudStationViewTool} from "./utils/PointCloudStationViewTool.js";

@@ -1,6 +1,7 @@
+import {PointCloudStationViewTool} from "../utils/PointCloudStationViewTool.js";
 import {PointCloudAlignmentTrackingTool, getPointCloudAlignmentResult, exportPointCloudAlignmentResults} from "../utils/PointCloudAlignmentTransform.js";
 import {PointCloudAlignmentTool} from "../utils/PointCloudAlignmentTool.js";
-import {isPointCloudAlignmentHidden, getAlignmentPointClouds} from "../utils/PointCloudLabelAppearance.js";
+import {isPointCloudRuntimeHidden, getAlignmentPointClouds} from "../utils/PointCloudLabelAppearance.js";
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {ClipTask, ClipMethod, CameraMode, LengthUnits, ElevationGradientRepeat} from "../defines.js";
 import {Renderer} from "../PotreeRenderer.js";
@@ -871,7 +872,7 @@ export class Viewer extends EventDispatcher{
 	/** Return whether any visible point cloud needs the offscreen X-ray renderer. */
 	hasVisibleXRAYEffectPointclouds (pointclouds = this.scene?.pointclouds ?? []) {
 		return pointclouds.some((pointcloud) => {
-			return pointcloud?.visible !== false && !isPointCloudAlignmentHidden(pointcloud)
+			return pointcloud?.visible !== false && !isPointCloudRuntimeHidden(pointcloud)
 				&& getPointcloudEffectState(pointcloud, this.isEDLSupported()).xrayEnabled;
 		});
 	};
@@ -1269,7 +1270,8 @@ export class Viewer extends EventDispatcher{
 	}
 
 	fitToScreen (factor = 1, animationDuration = 0) {
-		let box = this.getBoundingBox(this.scene.pointclouds);
+		// Station inspection scopes explicit resets without changing legacy framing.
+		let box = this.getBoundingBox(this.pointCloudStationViewTool?.getPointClouds() ?? this.scene.pointclouds);
 
 		let node = new THREE.Object3D();
 		node.boundingBox = box;
@@ -1359,6 +1361,8 @@ export class Viewer extends EventDispatcher{
 	}
 	/** Start a session only when an existing label selection identifies a scene member. */
 	enablePointCloudAlignment(){
+		// Explicit workflows never replace each other implicitly.
+		if (this.pointCloudStationViewTool && !this.pointCloudStationViewTool.disposed) return null;
 		if (this.pointCloudAlignmentTool && !this.pointCloudAlignmentTool.disposed) return this.pointCloudAlignmentTool;
 		const primary = this.pointCloudLabelTool?.getActivePointCloud();
 		if (!primary || !this.scene.pointclouds.includes(primary)) return null;
@@ -1401,6 +1405,22 @@ export class Viewer extends EventDispatcher{
 		if (!this.pointCloudAlignmentTrackingTool || this.pointCloudAlignmentTrackingTool.disposed) throw new Error("Enable point-cloud alignment tracking before exporting results");
 		return exportPointCloudAlignmentResults(this.scene.pointclouds);
 	}
+	/** Isolate a scene member only when explicitly requested; the host owns camera resets. */
+	enablePointCloudStationView(pointcloud){
+		if (this.pointCloudStationViewTool && !this.pointCloudStationViewTool.disposed) return this.pointCloudStationViewTool;
+		if (!pointcloud || !this.scene.pointclouds.includes(pointcloud)) return null;
+		if (this.pointCloudAlignmentTool && !this.pointCloudAlignmentTool.disposed) return null;
+		const tool = new PointCloudStationViewTool(this, pointcloud);
+		this.pointCloudStationViewTool = tool;
+		tool.dispatchState();
+		return tool;
+	}
+
+	/** Restore only runtime visibility owned by station viewing. */
+	disablePointCloudStationView(){
+		this.pointCloudStationViewTool?.dispose();
+		this.pointCloudStationViewTool = null;
+	}
 	// END point-cloud label API
 
 	setTopView(){
@@ -1420,12 +1440,13 @@ export class Viewer extends EventDispatcher{
 		);
 		// Keep every automatic top-view fit scoped to the preview's axis-owned main cloud.
 		const previewPointclouds = this.crossSectionPreviewTool?.getPreviewPointclouds?.() ?? [];
-		const pointcloudsForBox =
+		// Station viewing takes precedence only while explicitly enabled.
+		const pointcloudsForBox = this.pointCloudStationViewTool?.getPointClouds() ?? (
 			previewPointclouds.length > 0
 				? previewPointclouds
 				: visiblePointclouds.length > 0
 					? visiblePointclouds
-					: this.scene.pointclouds;
+						: this.scene.pointclouds);
 		let box = this.getBoundingBox(pointcloudsForBox );
 		if (activeControls?.camera?.isPerspectiveCamera) {
 			activeControls.camera.zoom = 1;
@@ -2355,7 +2376,7 @@ export class Viewer extends EventDispatcher{
 		
 		const scene = this.scene;
 		const camera = scene.getActiveCamera();
-		const visiblePointClouds = this.scene.pointclouds.filter(pc => pc.visible && !isPointCloudAlignmentHidden(pc))
+		const visiblePointClouds = this.scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc))
 		
 		Potree.pointLoadLimit = Potree.pointBudget * 2;
 

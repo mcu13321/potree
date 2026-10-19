@@ -1,4 +1,4 @@
-import {isPointCloudAlignmentHidden} from "../utils/PointCloudLabelAppearance.js";
+import {isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {PointCloudSM} from "../utils/PointCloudSM.js";
 import {EyeDomeLightingMaterial} from "../materials/EyeDomeLightingMaterial.js";
@@ -294,7 +294,7 @@ export class EDLRenderer{
 		
 		this.resize(width, height);
 
-		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible && !isPointCloudAlignmentHidden(pc));
+		const visiblePointClouds = viewer.scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc));
 		const {edlPointclouds, regularPointclouds} = this._getPointcloudGroups(visiblePointClouds);
 		const isGroupSource = isGroupPointcloudSource(viewer);
 		// 渲染阶段统一基于来源模式判断是否处于多点云分支。

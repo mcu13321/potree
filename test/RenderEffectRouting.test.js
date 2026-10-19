@@ -379,7 +379,7 @@ describe("Render effect routing", () => {
 
 });
 
-import {setPointCloudLabelAppearance, setPointCloudAlignmentHidden, getAlignmentPointClouds} from "../src/utils/PointCloudLabelAppearance.js";
+import {setPointCloudLabelAppearance, setPointCloudAlignmentHidden, setPointCloudStationHidden, getAlignmentPointClouds} from "../src/utils/PointCloudLabelAppearance.js";
 
 describe("label tint at the actual octree draw boundary", () => {
 	it("tints color and cached pass materials for both roles, restoring source state after a failed draw", () => {
@@ -465,6 +465,21 @@ it("suppresses hidden alignment clouds without writing their visible flag", () =
  expect(renderer.traverse(scene).octrees).toContain(pc);
  renderer.renderOctree(pc, [], createCamera(), null, {});
  expect(draw).toHaveBeenCalledTimes(1);
+});
+
+// Default LOD updates must retain the same array passed by legacy viewers.
+it("suppresses station-hidden scene traversal and direct picking until its owner releases it", () => {
+	const renderer = new PotreeGLRenderer(createRendererMock());
+	const pc = new PointCloudTree(), owner = {};
+	const draw = vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation(() => {});
+	setPointCloudStationHidden(pc, owner, true);
+	expect(renderer.traverse(pc).octrees).toEqual([]);
+	renderer.renderOctree(pc, [], createCamera(), null, {});
+	expect(draw).not.toHaveBeenCalled();
+	expect(pc.visible).toBe(true);
+	setPointCloudStationHidden(pc, owner, false);
+	renderer.renderOctree(pc, [], createCamera(), null, {});
+	expect(draw).toHaveBeenCalledOnce();
 });
 
 // Default LOD updates must retain the same array passed by legacy viewers.

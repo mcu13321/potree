@@ -2,6 +2,7 @@ import * as THREE from "../libs/three.js/build/three.module.js";
 import {afterEach, beforeAll, describe, expect, it, vi} from "vitest";
 import {EventDispatcher} from "../src/EventDispatcher.js";
 import {PointCloudLabelTool} from "../src/utils/PointCloudLabelTool.js";
+import {setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
 
 let Viewer;
 const tools = [];
@@ -92,6 +93,31 @@ describe("passive point-cloud labels", () => {
 		for (let i = 0; i < 97; i++) scene.pointclouds.push(cloud());
 		tool.update();
 		expect(tool.labels.get(scene.pointclouds.at(-1)).textContent).toBe("100");
+	});
+
+	// Station masking must cull endpoints without discarding numbering, text or relation records.
+	it("restores station-hidden labels and endpoints without recreating scene identities", () => {
+		const a = cloud(), b = cloud(), owner = {};
+		const {viewer} = fixture(false, [a, b]);
+		const tool = enable(viewer);
+		tool.setLabel(b, "station B");
+		tool.setConnections([{source: a, target: b}]);
+		const element = tool.labels.get(b);
+		setPointCloudStationHidden(b, owner, true);
+		try {
+			tool.update();
+			expect(element.style.display).toBe("none");
+			expect(tool.connectionProjections.has(b)).toBe(false);
+			expect(tool.connectionProjections.has(a)).toBe(true);
+			expect(tool.connections).toHaveLength(1);
+		} finally {setPointCloudStationHidden(b, owner, false);}
+		tool.update();
+		expect(tool.labels.get(b)).toBe(element);
+		expect(element.style.display).toBe("flex");
+		expect(element.textContent).toBe("station B");
+		expect(tool.connectionProjections.has(b)).toBe(true);
+		tool.setLabel(b, null);
+		expect(element.textContent).toBe("02");
 	});
 
 	it("restarts numbering and unbinds the old scene on a scene switch", () => {
@@ -369,6 +395,39 @@ describe("host-owned label connections", () => {
   rect.width = 1000;
   viewer.dispatchEvent({type: "render.pass.end"});
   expect(edge.getAttribute("x1")).not.toBe(initial);
+ });
+
+ it("remembers independent connection visibility across labels, scene changes and new pairs", () => {
+  const a = cloud(), b = cloud(); a.position.x = -3; b.position.x = 3;
+  const {viewer} = fixture(false, [a, b]);
+  const labels = enable(viewer);
+  // Defaults preserve existing callers, and hiding edges never consumes relationship data.
+  expect(labels.connectionsVisible).toBe(true);
+  labels.setConnections([{source: a, target: b}]);
+  expect(labels.setConnectionsVisible(false)).toBe(labels);
+  expect(labels.connectionLayer.style.display).toBe("none");
+  expect(labels.labels.get(a).style.display).toBe("flex");
+  expect(labels.connections).toHaveLength(1);
+  labels.setVisible(false); labels.setVisible(true);
+  expect(labels.connectionsVisible).toBe(false);
+  expect(labels.connectionLayer.style.display).toBe("none");
+  labels.setConnections([{source: b, target: a}]);
+  expect(labels.connectionLayer.style.display).toBe("none");
+  labels.setVisible(false); labels.setConnectionsVisible(true);
+  expect(labels.layer.style.display).toBe("none");
+  labels.setVisible(true);
+  expect(labels.connectionLayer.style.display).toBe("block");
+  labels.setConnectionsVisible(false);
+  // Changing scenes clears pairs but retains the tool's display preference.
+  const camera = viewer.scene.getActiveCamera();
+  const next = Object.assign(new EventDispatcher(), {pointclouds: [a, b], getActiveCamera: () => camera});
+  viewer.scene = next;
+  viewer.dispatchEvent({type: "scene_changed", scene: next});
+  labels.setConnections([{source: a, target: b}]);
+  expect(labels.connectionsVisible).toBe(false);
+  expect(labels.connectionLayer.style.display).toBe("none");
+  labels.dispose();
+  expect(() => labels.setConnectionsVisible(true)).not.toThrow();
  });
 
  it("hides during alignment and screenshots, clips offscreen endpoints and suppresses hidden or overlapping objects", () => {

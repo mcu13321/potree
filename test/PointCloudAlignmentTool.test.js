@@ -65,6 +65,16 @@ describe("opt-in point-cloud alignment", () => {
 		expect(viewer.enablePointCloudAlignment().getState().phase).toBe("paired");
 	});
 
+	// Both construction paths must reject a conflicting station session without changing selection.
+	it("cannot start alignment while a station view owns isolation", () => {
+		const {viewer, labels, clouds} = fixture();
+		labels.setActivePointCloud(clouds[0]);
+		viewer.pointCloudStationViewTool = {disposed: false};
+		expect(viewer.enablePointCloudAlignment()).toBeNull();
+		expect(() => new PointCloudAlignmentTool(viewer)).toThrow("station viewing");
+		expect(labels.getActivePointCloud()).toBe(clouds[0]);
+	});
+
 	it("hides only runtime source visibility and locks direct and label-based primary changes", () => {
 		const {viewer, labels, clouds: [a, b]} = fixture();
 		labels.setActivePointCloud(a);

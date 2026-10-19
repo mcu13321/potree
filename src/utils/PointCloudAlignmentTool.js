@@ -5,6 +5,8 @@ import {PointCloudAlignmentGizmo} from "./PointCloudAlignmentGizmo.js";
 /** Own an opt-in preview transaction and its two-cloud selection without touching geometry. */
 export class PointCloudAlignmentTool {
 	constructor(viewer) {
+		// Direct tool construction follows the same workflow exclusion as the Viewer API.
+		if (viewer.pointCloudStationViewTool && !viewer.pointCloudStationViewTool.disposed) throw new Error("Alignment is unavailable during station viewing");
 		const labels = viewer.pointCloudLabelTool;
 		const primary = labels?.getActivePointCloud();
 		if (!primary || !viewer.scene.pointclouds.includes(primary)) throw new Error("Alignment requires an active point cloud");

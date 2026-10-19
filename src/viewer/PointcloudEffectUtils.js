@@ -4,7 +4,7 @@
  * @returns {Object}
  */
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {getPointCloudLabelAppearance, isPointCloudAlignmentHidden} from "../utils/PointCloudLabelAppearance.js";
+import {getPointCloudLabelAppearance, isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
 
 /**
  * 统一读取运行时注入的点云来源模式，避免各处重复处理优先级与兜底。
@@ -201,7 +201,7 @@ export function applyViewerEffectDefaults(viewer, pointcloud, edlSupported = tru
  */
 export function hasVisibleEDLEffect(pointclouds, edlSupported = true) {
 	return pointclouds.some((pointcloud) => {
-		if (pointcloud.visible === false || isPointCloudAlignmentHidden(pointcloud)) {
+		if (pointcloud.visible === false || isPointCloudRuntimeHidden(pointcloud)) {
 			return false;
 		}
 

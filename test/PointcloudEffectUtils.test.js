@@ -1,4 +1,5 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
+import {setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
 import { describe, expect, it } from "vitest";
 import {
 	applyViewerEffectDefaults,
@@ -20,6 +21,17 @@ function createPointcloud(initialUserData = {}) {
 }
 
 describe("PointcloudEffectUtils", () => {
+	// Hidden stations must not select the EDL render path or change their saved effect preferences.
+	it("ignores station-hidden EDL clouds until their owner releases them", () => {
+		const cloud = createPointcloud({edlEnabled: true});
+		const owner = {};
+		setPointCloudStationHidden(cloud, owner, true);
+		expect(hasVisibleEDLEffect([cloud])).toBe(false);
+		expect(cloud.visible).toBe(true);
+		expect(cloud.userData.edlEnabled).toBe(true);
+		setPointCloudStationHidden(cloud, owner, false);
+		expect(hasVisibleEDLEffect([cloud])).toBe(true);
+	});
 	it("开启 EDL 时应自动关闭 XRAY", () => {
 		const pointcloud = createPointcloud({ xrayEnabled: true });
 

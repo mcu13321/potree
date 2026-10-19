@@ -1,12 +1,14 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
 
-import {setPointCloudLabelAppearance, isPointCloudAlignmentHidden} from "./PointCloudLabelAppearance.js";
+import {setPointCloudLabelAppearance, isPointCloudRuntimeHidden} from "./PointCloudLabelAppearance.js";
 
 /** Display selectable, fixed-size labels at transformed point-cloud bounding-box centers. */
 export class PointCloudLabelTool {
 	constructor(viewer) {
 		this.viewer = viewer;
 		this.visible = true;
+		// Connection visibility is independent of labels and defaults to the existing behavior.
+		this.connectionsVisible = true;
 		this.disposed = false;
 		this.labels = new Map();
 		this.connections = [];
@@ -187,10 +189,10 @@ export class PointCloudLabelTool {
  updateConnections(rect = this.viewer.renderer.domElement.getBoundingClientRect()) {
   if (!this.connectionLayer) return;
   const aligning = Boolean(this.alignmentTool && !this.alignmentTool.disposed);
-  this.connectionLayer.style.display = this.visible && !aligning ? "block" : "none";
+  this.connectionLayer.style.display = this.visible && this.connectionsVisible && !aligning ? "block" : "none";
   for (const {source, target, element} of this.connections) {
    element.style.display = "none";
-   if (aligning || !this.visible || rect.width <= 0 || rect.height <= 0) continue;
+   if (aligning || !this.visible || !this.connectionsVisible || rect.width <= 0 || rect.height <= 0) continue;
    const segment = this.projectClippedConnection(source, target, rect);
    if (!segment) continue;
    const a = this.labels.get(source), b = this.labels.get(target);
@@ -203,6 +205,14 @@ export class PointCloudLabelTool {
    element.style.display = "";
   }
  }
+
+	/** Toggle all relationship edges without deleting pairs or changing the label preference. */
+	setConnectionsVisible(visible) {
+		if (this.disposed) return this;
+		this.connectionsVisible = Boolean(visible);
+		this.update();
+		return this;
+	}
 
 	/** Set display text without consuming a number; null restores automatic numbering. */
 	setLabel(pointcloud, text) {
@@ -261,7 +271,7 @@ export class PointCloudLabelTool {
 			// Parent visibility and transforms are resolved without writing object poses.
 			let hidden = false;
 			for (let parent = cloud; parent; parent = parent.parent) hidden ||= parent.visible === false;
-			if (hidden || isPointCloudAlignmentHidden(cloud)) continue;
+			if (hidden || isPointCloudRuntimeHidden(cloud)) continue;
 			cloud.updateWorldMatrix(true, false);
 			this.box.copy(bounds).applyMatrix4(cloud.matrixWorld).getCenter(this.center);
 			this.projected.copy(this.center).applyMatrix4(camera.matrixWorldInverse);
