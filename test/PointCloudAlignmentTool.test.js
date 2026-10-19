@@ -231,7 +231,8 @@ describe("alignment transform gizmo", () => {
 		expect(visibleRing.getAttribute("r")).toBe("89");
 		expect(hitRing.getAttribute("r")).toBe("89");
 		expect(hitRing.style.pointerEvents).toBe("stroke");
-		const arrows = [...svg.querySelectorAll("path")];
+		// The sector is also an SVG path, so count only the four retained direction arrows.
+		const arrows = tool.gizmo.directionArrows;
 		expect(arrows).toHaveLength(4);
 		// Every rotated arrow has an 18px shaft starting 2px beyond the 40px label's edge.
 		arrows.forEach((arrow, index) => {
@@ -416,6 +417,212 @@ describe("alignment transform gizmo", () => {
 		expect(a.rotation.z).toBeCloseTo(-Math.PI);
 		viewer.disablePointCloudAlignment();
 		expect(handle.isConnected).toBe(false);
+	});
+
+	it.each([["perspective", "mouse"], ["orthographic", "touch"]])("shows gesture-local translation distance with a %s camera and %s pointer", (projection, pointerType) => {
+		const {viewer, labels, scene, element, clouds: [a, b]} = fixture();
+		// Offset the viewport and press off-center to distinguish pointer endpoints from label centers.
+		element.getBoundingClientRect = () => ({left: 70, top: 40, width: 800, height: 600});
+		if (projection === "orthographic") {
+			const camera = new THREE.OrthographicCamera(-12, 12, 9, -9, 0.1, 1000);
+			camera.position.set(0, 0, 20);
+			camera.lookAt(0, 0, 0);
+			scene.getActiveCamera = () => camera;
+		}
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		const gizmo = tool.gizmo, label = labels.labels.get(a);
+		const overlay = gizmo.translationFeedback, line = gizmo.translationLine;
+		const readout = gizmo.translationDistanceLabel, origin = gizmo.translationOrigin;
+		expect(overlay.style.display).toBe("none");
+		expect(overlay.style.pointerEvents).toBe("none");
+		expect(line.getAttribute("stroke-width")).toBe("2");
+		expect(line.getAttribute("stroke-dasharray")).toBe("4 4");
+		expect(line.getAttribute("stroke")).toBe("#fff");
+		expect(origin.getAttribute("r")).toBe("4");
+		// Both the dashed line and its starting marker use the requested white palette.
+		expect(origin.getAttribute("fill")).toBe("#fff");
+		// Distance text can grow beyond 50px while retaining the angle readout's other styles.
+		expect(readout.style.width).toBe("max-content");
+		expect(readout.style.minWidth).toBe("50px");
+		expect(readout.style.whiteSpace).toBe("nowrap");
+		for (const property of ["height", "borderRadius", "padding", "backgroundColor", "color", "fontSize", "fontWeight", "lineHeight"]) {
+			expect(readout.style[property]).toBe(gizmo.rotationAngleLabel.style[property]);
+		}
+		alignmentPointer(label, "pointerdown", 478, 345, 1, pointerType);
+		expect(overlay.style.display).toBe("block");
+		// Starting a gesture shows its markers while suppressing a zero distance readout.
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		expect(origin.getAttribute("cx")).toBe("408");
+		expect(origin.getAttribute("cy")).toBe("305");
+		alignmentPointer(label, "pointermove", 538, 425, 2, pointerType);
+		expect(line.getAttribute("x2")).toBe("408");
+		alignmentPointer(label, "pointermove", 538, 425, 1, pointerType);
+		expect(line.getAttribute("x1")).toBe("408");
+		expect(line.getAttribute("y1")).toBe("305");
+		expect(line.getAttribute("x2")).toBe("468");
+		expect(line.getAttribute("y2")).toBe("385");
+		expect(readout.style.left).toBe("446px");
+		expect(readout.style.top).toBe("333px");
+		// Distance is the net world translation, not the 100px screen distance or a path integral.
+		const worldPerPixel = projection === "perspective" ? 40 * Math.tan(Math.PI / 6) / 600 : 18 / 600;
+		expect(readout.textContent).toBe(`${(100 * worldPerPixel).toFixed(2)} m`);
+		expect(readout.style.display).toBe("flex");
+		expect(a.position.length()).toBeCloseTo(100 * worldPerPixel);
+		alignmentPointer(label, "pointermove", 478, 345, 1, pointerType);
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		alignmentPointer(label, "pointerup", 438, 345, 1, pointerType);
+		expect(overlay.style.display).toBe("none");
+		expect(readout.textContent).toBe("");
+		const completed = a.position.clone();
+		alignmentPointer(label, "pointerdown", 438, 345, 1, pointerType);
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		expect(origin.getAttribute("cx")).toBe("368");
+		alignmentPointer(label, "pointermove", 478, 345, 1, pointerType);
+		expect(readout.textContent).toBe(`${(40 * worldPerPixel).toFixed(2)} m`);
+		alignmentPointer(label, "pointercancel", 478, 345, 1, pointerType);
+		expect(overlay.style.display).toBe("none");
+		expect(a.position.distanceTo(completed)).toBeLessThan(1e-8);
+		alignmentPointer(label, "pointerdown", 438, 345, 1, pointerType);
+		alignmentPointer(label, "pointermove", 478, 345, 1, pointerType);
+		labels.setVisible(false);
+		expect(overlay.style.display).toBe("none");
+		labels.setVisible(true);
+		alignmentPointer(gizmo.rotationRings[1], "pointerdown", 489, 300, 1, pointerType);
+		expect(overlay.style.display).toBe("none");
+		viewer.disablePointCloudAlignment();
+		expect(overlay.isConnected).toBe(false);
+	});
+
+	it("hides a nonzero translation that rounds to zero meters until its displayed value becomes nonzero", () => {
+		const {viewer, labels, camera, clouds: [a, b]} = fixture();
+		// Strong zoom produces accepted screen drags whose world distance is below 0.005m.
+		camera.zoom = 1000;
+		camera.updateProjectionMatrix();
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		const label = labels.labels.get(a), readout = tool.gizmo.translationDistanceLabel;
+		alignmentPointer(label, "pointerdown", 400, 300);
+		alignmentPointer(label, "pointermove", 404, 300);
+		expect(a.position.length()).toBeGreaterThan(0);
+		expect(tool.gizmo.translationFeedback.style.display).toBe("block");
+		expect(readout.style.display).toBe("none");
+		expect(readout.textContent).toBe("");
+		alignmentPointer(label, "pointermove", 600, 300);
+		expect(readout.style.display).toBe("flex");
+		expect(readout.textContent).toBe("0.01 m");
+	});
+
+	it.each([
+		[450.1, "90.1°"], [-450.1, "-90.1°"],
+		[720.1, "0.1°"], [-720.1, "-0.1°"],
+		[1080.2, "0.2°"], [-1080.2, "-0.2°"],
+		[359.96, ""], [-359.96, ""],
+	])("formats %s accumulated degrees without floating-point tails", (angle, expected) => {
+		const {viewer, labels, clouds: [a, b]} = fixture();
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		alignmentPointer(tool.gizmo.rotationRings[1], "pointerdown", 489, 300);
+		// Isolate fractional multi-turn formatting from pointer sampling and camera projection.
+		tool.gizmo.gesture.angle = angle * Math.PI / 180;
+		tool.gizmo.updateRotationFeedback();
+		expect(tool.gizmo.rotationAngleLabel.textContent).toBe(expected);
+		expect(tool.gizmo.rotationAngleLabel.style.display).toBe(expected ? "flex" : "none");
+	});
+
+	it.each(["perspective", "orthographic"])("shows a gesture-local sector and angle through turns and reversals with a %s camera", projection => {
+		const {viewer, labels, scene, clouds: [a, b]} = fixture();
+		if (projection === "orthographic") {
+			// Both camera types must report the actual transform angle with identical screen sectors.
+			const camera = new THREE.OrthographicCamera(-12, 12, 9, -9, 0.1, 1000);
+			camera.position.set(0, 0, 20);
+			camera.lookAt(0, 0, 0);
+			scene.getActiveCamera = () => camera;
+		}
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		const {rotationSector: sector, rotationAngleLabel: readout} = tool.gizmo;
+		const ring = tool.gizmo.rotationRings[1];
+		expect(sector.getAttribute("fill")).toBe("#1c7efd80");
+		expect(sector.style.display).toBe("none");
+		expect(readout.style.display).toBe("none");
+		expect(readout.style.width).toBe("50px");
+		expect(readout.style.height).toBe("24px");
+		expect(readout.style.borderRadius).toBe("4px");
+		expect(readout.style.padding).toBe("2px 8px");
+		expect(readout.style.fontSize).toBe("14px");
+		expect(readout.style.fontFamily).toBe("");
+		// The readout fits between the center label and ring instead of using fixed page offsets.
+		expect(parseFloat(readout.style.left)).toBeGreaterThan(110);
+		expect(parseFloat(readout.style.left) + 50).toBeLessThan(177);
+		alignmentPointer(ring, "pointerdown", 489, 300);
+		// Zero angles stay hidden, including nonzero rotations below the displayed precision.
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		expect(sector.getAttribute("d")).toBe("");
+		alignmentPointer(ring, "pointermove", 589, 299.99);
+		expect(tool.gizmo.gesture.angle).not.toBe(0);
+		expect(readout.style.display).toBe("none");
+		alignmentPointer(ring, "pointermove", 400, 211);
+		expect(readout.textContent).toBe("90°");
+		expect(readout.style.display).toBe("flex");
+		expect(sector.getAttribute("d")).toContain("M90 90L177 90A87 87 0 0 0");
+		alignmentPointer(ring, "pointermove", 311, 300);
+		alignmentPointer(ring, "pointermove", 400, 389);
+		expect(readout.textContent).toBe("270°");
+		expect(sector.getAttribute("d")).toContain("A87 87 0 1 0");
+		alignmentPointer(ring, "pointermove", 489, 300);
+		// Whole turns hide the zero remainder; further turns display only the signed remainder.
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		expect(sector.getAttribute("d").match(/A/g)).toHaveLength(2);
+		alignmentPointer(ring, "pointermove", 400, 211);
+		expect(readout.textContent).toBe("90°");
+		expect(readout.style.display).toBe("flex");
+		expect(tool.gizmo.gesture.angle).toBeCloseTo(5 * Math.PI / 2);
+		expect(sector.getAttribute("d").match(/A/g)).toHaveLength(2);
+		// Reversing shrinks the signed sweep rather than retaining stale filled areas.
+		for (const [x, y] of [[489, 300], [400, 389], [311, 300], [400, 211], [489, 300]]) alignmentPointer(ring, "pointermove", x, y);
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		expect(sector.getAttribute("d")).toBe("");
+		alignmentPointer(ring, "pointermove", 400, 389);
+		expect(readout.textContent).toBe("-90°");
+		expect(sector.getAttribute("d")).toContain("A87 87 0 0 1");
+		// Clockwise multi-turn gestures retain their sign and follow the same zero handling.
+		for (const [x, y] of [[311, 300], [400, 211], [489, 300]]) alignmentPointer(ring, "pointermove", x, y);
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		alignmentPointer(ring, "pointermove", 400, 389);
+		expect(readout.textContent).toBe("-90°");
+		expect(readout.style.display).toBe("flex");
+		expect(tool.gizmo.gesture.angle).toBeCloseTo(-5 * Math.PI / 2);
+		alignmentPointer(ring, "pointerup", 400, 389);
+		expect(sector.style.display).toBe("none");
+		expect(sector.getAttribute("d")).toBe("");
+		expect(readout.style.display).toBe("none");
+		// A new press resets the angle and sector origin despite the cloud's existing rotation.
+		alignmentPointer(ring, "pointerdown", 311, 300);
+		expect(readout.textContent).toBe("");
+		expect(readout.style.display).toBe("none");
+		alignmentPointer(ring, "pointermove", 400, 211);
+		expect(readout.textContent).toBe("-90°");
+		expect(sector.getAttribute("d")).toMatch(/^M90 90L3 /);
+		alignmentPointer(ring, "pointercancel", 400, 211);
+		expect(a.rotation.z).toBeCloseTo(-Math.PI / 2);
+		expect(sector.style.display).toBe("none");
+		expect(readout.style.display).toBe("none");
+		expect(readout.textContent).toBe("");
+		alignmentPointer(labels.labels.get(a), "pointerdown", 400, 300);
+		expect(sector.style.display).toBe("none");
+		expect(readout.style.display).toBe("none");
 	});
 
 	it("rotates around the label center, unwraps full turns and rolls back on target change or later", () => {

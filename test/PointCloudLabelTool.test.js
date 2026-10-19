@@ -355,7 +355,8 @@ describe("host-owned label connections", () => {
   const edge = labels.connectionLayer.querySelector("line");
   expect(labels.layer.firstChild).toBe(labels.connectionLayer);
   expect(labels.connectionLayer.style.pointerEvents).toBe("none");
-  expect(edge.getAttribute("stroke")).toBe("#8dcfff");
+  // Relationship edges use the same blue as the label background.
+  expect(edge.getAttribute("stroke")).toBe("#1c7efd");
   expect(edge.getAttribute("stroke-width")).toBe("2");
   expect(Number(edge.getAttribute("x1"))).toBeCloseTo(parseFloat(labels.labels.get(a).style.left) + 20, 7);
   expect(Number(edge.getAttribute("x2"))).toBeCloseTo(parseFloat(labels.labels.get(b).style.left) - 20, 7);

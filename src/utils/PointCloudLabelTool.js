@@ -142,7 +142,8 @@ export class PointCloudLabelTool {
   for (const {source, target} of pairs) {
    if (!source || !target || source === target) continue;
    const element = document.createElementNS(ns, "line");
-   element.setAttribute("stroke", "#8dcfff");
+   // Match relationship edges to the shared point-cloud label background.
+   element.setAttribute("stroke", "#1c7efd");
    element.setAttribute("stroke-width", "2");
    element.setAttribute("pointer-events", "none");
    this.connectionLayer.appendChild(element);
