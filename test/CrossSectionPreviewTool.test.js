@@ -287,6 +287,32 @@ describe("cross-section preview initialization camera", () => {
 		tool.dispose();
 	});
 
+
+	// Alignment updates must move the frames while preserving the complete user camera pose.
+	test.each(["perspective", "orthographic"])("preserves user navigation when switching %s preview alignment", (projection) => {
+		const {controls, tool, viewer, preview} = createPreviewViewer(projection);
+		tool.setPreview({...preview, axisAnchor: "center"});
+		moveCamera(controls);
+		const userPose = controls.getRigidPose();
+		const centerBounds = new THREE.Box3().setFromObject(tool.group);
+		for (const axisAnchor of ["bottom", "center", "bottom"]) {
+			tool.setPreview({...preview, axisAnchor});
+			tool.update();
+			expectCameraPose(controls, userPose);
+			expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
+			const bounds = new THREE.Box3().setFromObject(tool.group);
+			expect(bounds.min.z).toBeCloseTo(centerBounds.min.z + (axisAnchor === "bottom" ? preview.frameSideLength / 2 : 0));
+		}
+		// A delayed size update must retain the new alignment and user navigation.
+		tool.setPreview({...preview, axisAnchor: "bottom", frameSideLength: 8});
+		expectCameraPose(controls, userPose);
+		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
+		tool.clear();
+		tool.setPreview({...preview, axisAnchor: "bottom"});
+		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(2);
+		tool.dispose();
+	});
+
 	test.each(["missing", "hidden", "empty"])("does not move the camera when the main cloud is %s", (state) => {
 		const {controls, main, tool, viewer, preview} = createPreviewViewer("perspective");
 		moveCamera(controls);

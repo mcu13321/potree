@@ -359,8 +359,8 @@ export class CrossSectionPreviewTool {
 			sectionStep: toFiniteNumber(config.sectionStep),
 			sectionThickness: toFiniteNumber(config.sectionThickness),
 		};
+		// Alignment changes rebuild geometry without starting another camera fit.
 		const shapeKey = JSON.stringify({
-			axisAnchor: preview.axisAnchor,
 			axisUuid: preview.axisUuid,
 			mainPointCloudBaseUrl: preview.mainPointCloudBaseUrl,
 			sectionEnd: preview.sectionEnd,
