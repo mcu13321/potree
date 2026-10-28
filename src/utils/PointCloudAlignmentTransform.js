@@ -87,6 +87,35 @@ export function endAlignmentPose(cloud, committed) {
 	}
 }
 
+/** Explicit host updates preserve loading baselines and never install default scene hooks. */
+export function setPointCloudPose(viewer, cloud, input) {
+	if (!cloud?.isObject3D) throw new TypeError("A point-cloud object is required");
+	const member = viewer.scene.pointclouds.includes(cloud);
+	if (!member && (cloud.parent || alignmentTrackingOwners.get(cloud)?.size)) throw new RangeError("Point cloud belongs to another scene");
+	const tracker = viewer.pointCloudAlignmentTrackingTool;
+	const record = alignmentExportPoses.get(cloud) ?? tracker?.records.get(cloud);
+	if (member && (!tracker || tracker.disposed || tracker.scene !== viewer.scene || !record)) throw new Error("Enable alignment tracking before updating a scene member");
+	if (viewer.pointCloudAlignmentTool && !viewer.pointCloudAlignmentTool.disposed) throw new Error("End alignment before setting a point-cloud pose");
+	const values = input?.elements;
+	if (!values || values.length !== 16 || !Array.from(values).every(Number.isFinite)) throw new RangeError("Pose matrix must contain 16 finite values");
+	const matrix = new THREE.Matrix4().fromArray(values);
+	const determinant = matrix.determinant();
+	if (!Number.isFinite(determinant) || determinant === 0 || [3, 7, 11].some(i => Math.abs(values[i]) > 1e-12) || Math.abs(values[15] - 1) > 1e-12) throw new RangeError("Pose matrix must be invertible and affine");
+	// Validate decomposition before any object, source-position cache or tracking record is changed.
+	const position = new THREE.Vector3(), quaternion = new THREE.Quaternion(), scale = new THREE.Vector3();
+	matrix.decompose(position, quaternion, scale);
+	if (![...position.toArray(), ...quaternion.toArray(), ...scale.toArray()].every(Number.isFinite)) throw new RangeError("Pose matrix cannot be decomposed");
+	if (!applyAlignmentLocalMatrix(cloud, matrix)) throw new RangeError("Pose matrix cannot be applied");
+	alignmentCommittedMatrices.add(cloud);
+	if (record) record.committed = captureAlignmentPose(cloud);
+	// Detached clouds receive their initial record only when an explicitly enabled tracker retains them.
+	if (member) {
+		viewer.pointCloudLabelTool?.update();
+		viewer.dispatchEvent({type: "pointcloud_pose_changed", pointcloud: cloud, matrix: cloud.matrix.clone(), matrixWorld: cloud.matrixWorld.clone()});
+	}
+	return cloud;
+}
+
 /** Save the baseline during preview, and exact confirmed matrices after commit. */
 export function getAlignmentPoseData(cloud) {
 	const pose = alignmentPoseSnapshots.get(cloud);

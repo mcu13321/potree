@@ -1,5 +1,5 @@
 import {PointCloudStationViewTool} from "../utils/PointCloudStationViewTool.js";
-import {PointCloudAlignmentTrackingTool, getPointCloudAlignmentResult, exportPointCloudAlignmentResults} from "../utils/PointCloudAlignmentTransform.js";
+import {PointCloudAlignmentTrackingTool, getPointCloudAlignmentResult, exportPointCloudAlignmentResults, setPointCloudPose} from "../utils/PointCloudAlignmentTransform.js";
 import {PointCloudAlignmentTool} from "../utils/PointCloudAlignmentTool.js";
 import {isPointCloudRuntimeHidden, getAlignmentPointClouds} from "../utils/PointCloudLabelAppearance.js";
 import * as THREE from "../../libs/three.js/build/three.module.js";
@@ -1391,6 +1391,11 @@ export class Viewer extends EventDispatcher{
 		this.disablePointCloudAlignment();
 		this.pointCloudAlignmentTrackingTool?.dispose();
 		this.pointCloudAlignmentTrackingTool = null;
+	}
+
+	/** Apply a parent-local pose only on explicit host calls; camera and other clouds are untouched. */
+	setPointCloudPose(pointcloud, matrix){
+		return setPointCloudPose(this, pointcloud, matrix);
 	}
 
 	/** Return a defensive confirmed result for a member of the current scene. */
