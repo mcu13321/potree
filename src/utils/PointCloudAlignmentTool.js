@@ -35,12 +35,14 @@ export class PointCloudAlignmentTool {
 		return {phase: this.phase, activePointcloud: this.disposed ? this.labels.getActivePointCloud() : this.activePointCloud, active2Pointcloud: this.active2PointCloud};
 	}
 
-	/** A new target always starts from the session entry pose, not the preceding preview. */
+	/** Choose the reference once per session; repeated selection of the same member is idempotent. */
 	setActive2PointCloud(pointcloud) {
 		this.reconcile();
 		if (this.disposed) throw new Error("The alignment session has ended");
 		if (pointcloud !== null && (pointcloud === this.activePointCloud || !this.scene.pointclouds.includes(pointcloud))) throw new RangeError("Alignment target must be another point cloud in the current scene");
 		if (pointcloud === this.active2PointCloud) return this;
+		// Reject changes before any rollback or event can disturb the current preview.
+		if (this.active2PointCloud) throw new Error("Alignment reference is locked during alignment");
 		this.restoreOriginal();
 		this.active2PointCloud = pointcloud;
 		this.phase = pointcloud ? "paired" : "waiting";
@@ -50,7 +52,7 @@ export class PointCloudAlignmentTool {
 		return this;
 	}
 
-	/** Reset completed gestures too when the target or entire transaction is cancelled. */
+	/** Reset completed gestures too when the entire transaction is cancelled. */
 	restoreOriginal() {
 		this.gizmo.cancelGesture();
 		const before = captureAlignmentPose(this.activePointCloud).matrix;
@@ -73,12 +75,8 @@ export class PointCloudAlignmentTool {
 		if (this.viewer.scene !== this.scene || this.labels.disposed || !this.scene.pointclouds.includes(this.activePointCloud)) {
 			this.dispose(false);
 		} else if (this.active2PointCloud && !this.scene.pointclouds.includes(this.active2PointCloud)) {
-			// Clear membership first because cancelling a pointer can synchronously update labels.
-			this.active2PointCloud = null;
-			this.phase = "waiting";
-			this.restoreOriginal();
-			setPointCloudAlignmentHidden(this.activePointCloud, true);
-			this.dispatchState();
+			// Losing the locked reference ends this transaction instead of unlocking another target.
+			this.dispose();
 		}
 	}
 

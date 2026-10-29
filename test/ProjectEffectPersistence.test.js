@@ -314,10 +314,11 @@ it("saves base effects while label selection is active", () => {
 	viewer.getEDLEnabled = () => getPointcloudEffectState(pc).edlEnabled;
 	setPointCloudLabelAppearance(pc, true);
 	try {
-		// Runtime Xray must never replace base EDL, opacity or color mode in a saved project.
-		expect(viewer.getEDLEnabled()).toBe(false);
+		// Runtime selection effects must never replace base preferences in a saved project.
+		expect(viewer.getEDLEnabled()).toBe(true);
 		for (const active of [true, false, "secondary"]) {
 			setPointCloudLabelAppearance(pc, active);
+			expect(viewer.getEDLEnabled()).toBe(active !== false);
 			const saved = saveProject(viewer);
 			expect(saved.settings.edlEnabled).toBe(true);
 			expect(saved.pointclouds[0]).toMatchObject({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.35, material: {activeAttributeName: "rgba"}});

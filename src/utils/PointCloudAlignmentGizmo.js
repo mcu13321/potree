@@ -1,5 +1,5 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {captureAlignmentPose, restoreAlignmentPose, applyAlignmentLocalMatrix, getAlignmentWorldCenter, getAlignmentViewNormal, alignmentPlanePoint, alignmentRotationMatrix} from "./PointCloudAlignmentTransform.js";
+import {captureAlignmentPose, restoreAlignmentPose, applyAlignmentLocalMatrix, getAlignmentViewNormal, alignmentPlanePoint, alignmentRotationMatrix} from "./PointCloudAlignmentTransform.js";
 
 // Each opted-in gizmo owns a unique SVG mask, including viewers sharing one document.
 let rotationSectorMaskId = 0;
@@ -266,7 +266,8 @@ export class PointCloudAlignmentGizmo {
 		// Guard the operation as well as the DOM, including direct or stale pointer input.
 		if (!this.available || (operation === "rotate" && !this.rotationAllowed)) return;
 		const normal = getAlignmentViewNormal(this.viewer.getViewMode());
-		const center = getAlignmentWorldCenter(this.cloud);
+		// The visual anchor also defines the frozen translation plane and rotation axis.
+		const center = this.labels.getWorldAnchor(this.cloud);
 		const camera = this.tool.scene.getActiveCamera();
 		const rect = this.viewer.renderer.domElement.getBoundingClientRect();
 		if (!center) return;

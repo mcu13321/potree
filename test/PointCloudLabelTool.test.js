@@ -144,7 +144,91 @@ describe("passive point-cloud labels", () => {
 		expect(parseFloat(label.style.top)).toBeCloseTo(300);
 	});
 
+	// Explicit anchors share one projection path while the legacy default remains unchanged.
+	it("opts into world anchors, retains them for new scenes and releases them on disposal", () => {
+		const a = cloud(), b = cloud();
+		const {viewer, scene, makeScene} = fixture(false, [a]);
+		const tool = enable(viewer), pose = a.matrix.clone();
+		expect(tool.anchorResolver).toBeNull();
+		expect(tool.getWorldAnchor(a).toArray()).toEqual([0, 0, 0]);
+		const resolver = (pc, target) => target.set(1, 2, 1.2).applyMatrix4(pc.matrixWorld);
+		expect(tool.setAnchorResolver(resolver)).toBe(tool);
+		expect(tool.getWorldAnchor(a).toArray()).toEqual([1, 2, 1.2]);
+		expect(a.matrix.equals(pose)).toBe(true);
+		expect(a.userData).toEqual({});
+		expect(tool.getActivePointCloud()).toBeNull();
+		expect(() => tool.setAnchorResolver({})).toThrow(TypeError);
+		scene.pointclouds.push(b);
+		scene.dispatchEvent({type: "pointcloud_added", pointcloud: b});
+		expect(tool.getWorldAnchor(b).toArray()).toEqual([1, 2, 1.2]);
+		viewer.scene = makeScene([b]);
+		viewer.dispatchEvent({type: "scene_changed"});
+		expect(tool.anchorResolver).toBe(resolver);
+		expect(tool.labels.get(b).textContent).toBe("01");
+		tool.setAnchorResolver(null);
+		expect(tool.getWorldAnchor(b).toArray()).toEqual([0, 0, 0]);
+		tool.setAnchorResolver(resolver);
+		tool.dispose();
+		expect(tool.anchorResolver).toBeNull();
+		expect(tool.getWorldAnchor(b)).toBeNull();
+		tool.setAnchorResolver(resolver);
+		expect(tool.anchorResolver).toBeNull();
+		expect(enable(viewer).anchorResolver).toBeNull();
+	});
+
+	it("hides invalid custom anchors and their edges without suppressing other labels", () => {
+		const a = cloud(), b = cloud();
+		b.position.x = 4;
+		const {viewer} = fixture(false, [a, b]), tool = enable(viewer);
+		tool.setConnections([{source: a, target: b}]);
+		for (const invalid of [() => null, () => undefined, (_pc, target) => target.set(NaN, 0, 0), () => {throw new Error("bad metadata");}]) {
+			tool.setAnchorResolver((pc, target) => pc === a ? invalid(pc, target) : target.setFromMatrixPosition(pc.matrixWorld));
+			expect(tool.labels.get(a).style.display).toBe("none");
+			expect(tool.labels.get(b).style.display).toBe("flex");
+			expect(tool.connections[0].element.style.display).toBe("none");
+			expect(tool.connectionProjections.has(a)).toBe(false);
+		}
+		// Valid custom anchors do not require a bounding box, and connections use those same anchors.
+		delete a.boundingBox;
+		tool.setAnchorResolver((pc, target) => target.set(1, 1, 1.2).applyMatrix4(pc.matrixWorld));
+		expect(tool.labels.get(a).style.display).toBe("flex");
+		expect(tool.connections[0].element.style.display).toBe("");
+		const clip = tool.connectionProjections.get(a).clip;
+		expect(parseFloat(tool.labels.get(a).style.left)).toBeCloseTo((clip.x / clip.w + 1) * 400);
+		a.position.x = 1000;
+		tool.update();
+		expect(tool.labels.get(a).style.display).toBe("none");
+		expect(tool.connections[0].element.style.display).toBe("");
+	});
+
 	for (const orthographic of [false, true]) {
+		it(`projects custom anchors across all views, parent transforms and viewport sizes (${orthographic})`, () => {
+			const pc = cloud(), parent = new THREE.Object3D();
+			parent.position.set(1e6, 2e6, 3e6);
+			parent.rotation.set(0.2, -0.3, 0.5);
+			parent.add(pc);
+			pc.position.set(1, -1, 2);
+			const {viewer, camera, rect} = fixture(orthographic, [pc]), tool = enable(viewer);
+			tool.setAnchorResolver((pointcloud, target) => target.set(1, 2, 1.2).applyMatrix4(pointcloud.matrixWorld));
+			for (const direction of [[12, 12, 12], [0, 0, 20], [0, 0, -20], [-20, 0, 0], [20, 0, 0], [0, -20, 0], [0, 20, 0]]) {
+				const anchor = tool.getWorldAnchor(pc);
+				camera.position.copy(anchor).add(new THREE.Vector3(...direction));
+				// Avoid lookAt's pole perturbation when the viewing direction is parallel to camera up.
+				camera.up.set(0, direction[2] ? 1 : 0, direction[2] ? 0 : 1);
+				camera.lookAt(anchor);
+				tool.update();
+				const label = tool.labels.get(pc);
+				expect(label.style.display).toBe("flex");
+				expect(parseFloat(label.style.left)).toBeCloseTo(rect.width / 2, 5);
+				expect(parseFloat(label.style.top)).toBeCloseTo(rect.height / 2, 5);
+			}
+			rect.width /= 2; rect.height /= 2;
+			viewer.dispatchEvent({type: "render.pass.end"});
+			expect(parseFloat(tool.labels.get(pc).style.left)).toBeCloseTo(rect.width / 2, 5);
+			parent.visible = false; tool.update();
+			expect(tool.labels.get(pc).style.display).toBe("none");
+		});
+
 		it(`projects transformed centers and large coordinates with ${orthographic ? "orthographic" : "perspective"} cameras`, () => {
 			const pc = cloud();
 			const parent = new THREE.Object3D();
@@ -233,8 +317,9 @@ describe("single active point-cloud label", () => {
 		expect(tool.layer.hasAttribute("aria-hidden")).toBe(false);
 		tool.labels.get(a).click();
 		expect(tool.getActivePointCloud()).toBe(a);
-		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: true, edlEnabled: false});
-		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: false, edlEnabled: false});
+		// Only the active cloud owns EDL; other members retain their color under Xray.
+		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: false, edlEnabled: true});
+		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: true, edlEnabled: false});
 		expect(tool.labels.get(a).getAttribute("aria-pressed")).toBe("true");
 		tool.labels.get(a).click();
 		element.click();
@@ -242,8 +327,9 @@ describe("single active point-cloud label", () => {
 		tool.labels.get(b).click();
 		expect(tool.getActivePointCloud()).toBe(b);
 		expect(tool.labels.get(a).getAttribute("aria-pressed")).toBe("false");
-		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: false, edlEnabled: false});
-		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: true, edlEnabled: false});
+		// Switching active transfers EDL without overwriting either base configuration.
+		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: true, edlEnabled: false});
+		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: false, edlEnabled: true});
 		expect(changed.mock.calls[1][0]).toMatchObject({pointcloud: b, previousPointcloud: a});
 		expect(a.userData).toEqual({edlEnabled: true});
 		expect(b.userData).toEqual({xrayEnabled: true});
@@ -251,6 +337,34 @@ describe("single active point-cloud label", () => {
 		tool.setActivePointCloud(null);
 		expect(getPointcloudEffectState(a).edlEnabled).toBe(true);
 		expect(getPointCloudLabelAppearance(b)).toBeUndefined();
+	});
+
+	it("makes paired non-primary labels inert without changing their shared palette", () => {
+		const a = cloud(), b = cloud(), c = cloud(), {viewer} = fixture(false, [a, b, c]);
+		const tool = enable(viewer);
+		tool.setActivePointCloud(a);
+		const style = tool.labels.get(b).style.backgroundColor;
+		// Isolate label interaction policy from the alignment transaction and its gesture calculations.
+		tool.alignmentTool = {active2PointCloud: b};
+		try {
+			tool.syncAppearance();
+			for (const pc of [b, c]) {
+				const label = tool.labels.get(pc);
+				expect(label.disabled).toBe(true);
+				expect(label.style.pointerEvents).toBe("none");
+				expect(label.style.backgroundColor).toBe(style);
+				const event = new MouseEvent("click", {bubbles: true, cancelable: true});
+				label.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(true);
+			}
+			expect(tool.labels.get(a).disabled).toBe(false);
+			expect(tool.labels.get(a).style.pointerEvents).toBe("auto");
+			expect(tool.getActivePointCloud()).toBe(a);
+		} finally { tool.alignmentTool = null; tool.syncAppearance(); }
+		for (const label of tool.labels.values()) {
+			expect(label.disabled).toBe(false);
+			expect(label.style.pointerEvents).toBe("auto");
+		}
 	});
 
 	it("keeps one 40px blue and white-bordered palette across all selection changes", () => {
@@ -286,16 +400,16 @@ describe("single active point-cloud label", () => {
 		const tool = enable(viewer);
 		tool.setActivePointCloud(a);
 		// The same setters are used by the settings panel and TreeTag selection.
-		setPointcloudEDLEnabled(a, true);
-		setPointcloudXRAYEnabled(b, true);
-		expect(a.userData).toMatchObject({edlEnabled: true, xrayEnabled: false});
-		expect(b.userData).toMatchObject({edlEnabled: false, xrayEnabled: true});
-		// Selected clouds retain Xray even when effect settings change.
-		expect(getPointcloudEffectState(a)).toMatchObject({edlEnabled: false, xrayEnabled: true});
-		expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: false, xrayEnabled: false});
+		setPointcloudXRAYEnabled(a, true);
+		setPointcloudEDLEnabled(b, true);
+		expect(a.userData).toMatchObject({edlEnabled: false, xrayEnabled: true});
+		expect(b.userData).toMatchObject({edlEnabled: true, xrayEnabled: false});
+		// Selection owns EDL/Xray routing until cleared, even when opposite base effects are saved.
+		expect(getPointcloudEffectState(a)).toMatchObject({edlEnabled: true, xrayEnabled: false});
+		expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: false, xrayEnabled: true});
 		tool.setActivePointCloud(null);
-		expect(getPointcloudEffectState(a).edlEnabled).toBe(true);
-		expect(getPointcloudEffectState(b).xrayEnabled).toBe(true);
+		expect(getPointcloudEffectState(a).xrayEnabled).toBe(true);
+		expect(getPointcloudEffectState(b).edlEnabled).toBe(true);
 	});
 
 	it("retains hidden selection and covers late arrivals but clears when the active member is removed", () => {
@@ -309,6 +423,8 @@ describe("single active point-cloud label", () => {
 		scene.pointclouds.push(b);
 		scene.dispatchEvent({type: "pointcloud_added", pointcloud: b});
 		expect(getPointCloudLabelAppearance(b)).toBe(false);
+		// Late members inherit the current Xray override, including when labels are hidden.
+		expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: false, xrayEnabled: true});
 		expect(tool.getActivePointCloud()).toBe(a);
 		tool.setVisible(true);
 		expect(tool.getActivePointCloud()).toBe(a);
@@ -317,6 +433,7 @@ describe("single active point-cloud label", () => {
 		expect(tool.getActivePointCloud()).toBeNull();
 		expect(getPointCloudLabelAppearance(a)).toBeUndefined();
 		expect(getPointCloudLabelAppearance(b)).toBeUndefined();
+		expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: false, xrayEnabled: false});
 	});
 
 	it("clears old scene overrides and releases detached button handlers on disposal", () => {

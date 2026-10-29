@@ -1,5 +1,6 @@
 import {afterEach, beforeAll, describe, expect, it, vi} from "vitest";
 import * as THREE from "../libs/three.js/build/three.module.js";
+import {getPointcloudEffectState} from "../src/viewer/PointcloudEffectUtils.js";
 import {EventDispatcher} from "../src/EventDispatcher.js";
 import {PointCloudStationViewTool} from "../src/utils/PointCloudStationViewTool.js";
 import {getAlignmentPointClouds, getPointCloudLabelAppearance, isPointCloudRuntimeHidden, setPointCloudAlignmentHidden, setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
@@ -78,6 +79,8 @@ describe("opt-in station viewing", () => {
 		expect(labels.labels.get(b).style.display).toBe("none");
 		expect(labels.connectionProjections.has(b)).toBe(false);
 		expect(getPointCloudLabelAppearance(a)).toBe(true);
+		// Station isolation inherits the selected EDL role without changing base visibility.
+		expect(getPointcloudEffectState(a)).toMatchObject({edlEnabled: true, xrayEnabled: false});
 		expect(labels.getActivePointCloud()).toBe(a);
 		labels.setVisible(false);
 		labels.setConnectionsVisible(false);

@@ -2,7 +2,7 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 
 import {setPointCloudLabelAppearance, isPointCloudRuntimeHidden} from "./PointCloudLabelAppearance.js";
 
-/** Display selectable, fixed-size labels at transformed point-cloud bounding-box centers. */
+/** Display selectable, fixed-size labels at default centers or explicit host anchors. */
 export class PointCloudLabelTool {
 	constructor(viewer) {
 		this.viewer = viewer;
@@ -14,6 +14,8 @@ export class PointCloudLabelTool {
 		this.connections = [];
 		this.connectionProjections = new Map();
 		this.activePointCloud = null;
+		// Custom anchors are opt-in and remain owned by this tool, never by cloud metadata.
+		this.anchorResolver = null;
 		this.appearanceClouds = new Set();
 		this.cloudByElement = new WeakMap();
 		this.box = new THREE.Box3();
@@ -82,12 +84,22 @@ export class PointCloudLabelTool {
 				this.appearanceClouds.add(cloud);
 			}
 		}
+		// Once paired, only the primary label may own input, including during idle time between presses.
+		const paired = Boolean(this.alignmentTool?.active2PointCloud);
+		if (paired && this.gesture) {
+			const {element, id} = this.gesture;
+			this.gesture = null;
+			this.suppressPointerClick = true;
+			// Release a pending ordinary-label capture before disabling the chosen reference button.
+			try { if (element.hasPointerCapture?.(id)) element.releasePointerCapture(id); } catch { /* Native capture may already have ended. */ }
+		}
 		for (const [cloud, element] of this.labels) {
 			const active = cloud === this.activePointCloud;
 			const secondary = cloud === this.alignmentTool?.active2PointCloud;
-			// Paired primary labels translate the source while direct active changes stay locked.
-			element.disabled = active && Boolean(this.alignmentTool) && !this.alignmentTool.active2PointCloud;
-			element.style.cursor = active && this.alignmentTool?.active2PointCloud ? "move" : "pointer";
+			// Pointer pass-through lets an overlapping primary or rotation handle receive the actual press.
+			element.disabled = paired ? !active : active && Boolean(this.alignmentTool);
+			element.style.pointerEvents = paired && !active ? "none" : "auto";
+			element.style.cursor = paired && active ? "move" : "pointer";
 			// Selection changes interaction and ARIA state while retaining one shared label palette.
 			element.setAttribute("aria-pressed", String(active || secondary));
 		}
@@ -99,6 +111,8 @@ export class PointCloudLabelTool {
 		const cloud = this.cloudByElement.get(element);
 		if (this.disposed || !this.visible || !cloud || !this.labels.has(cloud)) return;
 		event.stopPropagation();
+		// The gizmo capture handler owns paired input; synthetic label events cannot change the reference.
+		if (this.alignmentTool?.active2PointCloud) { event.preventDefault(); return; }
 		if (event.type === "pointerdown") {
 			this.suppressPointerClick = event.button !== 0 || Boolean(this.gesture);
 			if (this.suppressPointerClick) { this.gesture = null; return; }
@@ -235,6 +249,41 @@ export class PointCloudLabelTool {
 		return this;
 	}
 
+	// BEGIN point-cloud label anchor API
+	/** Set a world-space resolver; null restores bounding-box centers without changing cloud poses. */
+	setAnchorResolver(resolver) {
+		if (this.disposed) return this;
+		if (resolver !== null && typeof resolver !== "function") throw new TypeError("Anchor resolver must be a function or null");
+		if (this.anchorResolver === resolver) return this;
+		// Roll back the current press before its frozen plane or rotation pivot can change.
+		this.alignmentTool?.gizmo?.cancelGesture();
+		this.gesture = null;
+		this.anchorResolver = resolver;
+		this.update();
+		return this;
+	}
+
+	/** Resolve one finite world anchor for labels, relationship endpoints and alignment pivots. */
+	getWorldAnchor(pointcloud, target = new THREE.Vector3()) {
+		if (this.disposed || !pointcloud) return null;
+		// Do not recursively update octree nodes, whose matrices belong to the point renderer.
+		pointcloud.updateWorldMatrix(true, false);
+		if (this.anchorResolver) {
+			try {
+				const anchor = this.anchorResolver(pointcloud, target.set(NaN, NaN, NaN));
+				if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isFinite)) return null;
+				target.copy(anchor);
+			} catch { return null; /* Invalid host data hides only this cloud's UI. */ }
+		} else {
+			// Keep the legacy world-box center unless the host explicitly supplies a resolver.
+			const bounds = pointcloud.pcoGeometry?.tightBoundingBox ?? pointcloud.boundingBox ?? pointcloud.pcoGeometry?.boundingBox;
+			if (!bounds || bounds.isEmpty()) return null;
+			this.box.copy(bounds).applyMatrix4(pointcloud.matrixWorld).getCenter(target);
+		}
+		return [target.x, target.y, target.z].every(Number.isFinite) ? target : null;
+	}
+	// END point-cloud label anchor API
+
 	/** Reconcile membership and project using CSS pixels, independent of device pixel ratio. */
 	update() {
 		if (this.disposed) return;
@@ -265,15 +314,14 @@ export class PointCloudLabelTool {
 		this.connectionProjections.clear();
 		for (const [cloud, element] of this.labels) {
 			element.style.display = "none";
-			// Match Scene bounds: octree cubes include empty padding beyond the actual cloud.
-			const bounds = cloud.pcoGeometry?.tightBoundingBox ?? cloud.boundingBox ?? cloud.pcoGeometry?.boundingBox;
-			if (!camera || !bounds || bounds.isEmpty() || rect.width <= 0 || rect.height <= 0) continue;
+			// A custom anchor may be valid even when no bounding box is available.
+			if (!camera || rect.width <= 0 || rect.height <= 0) continue;
 			// Parent visibility and transforms are resolved without writing object poses.
 			let hidden = false;
 			for (let parent = cloud; parent; parent = parent.parent) hidden ||= parent.visible === false;
 			if (hidden || isPointCloudRuntimeHidden(cloud)) continue;
-			cloud.updateWorldMatrix(true, false);
-			this.box.copy(bounds).applyMatrix4(cloud.matrixWorld).getCenter(this.center);
+			// Resolve once so label positions and clipped relationship endpoints cannot diverge.
+			if (!this.getWorldAnchor(cloud, this.center)) continue;
 			this.projected.copy(this.center).applyMatrix4(camera.matrixWorldInverse);
 			// Keep valid object centers for line clipping even when their labels are culled.
 			if (this.connections.length) this.connectionProjections.set(cloud, {clip: new THREE.Vector4(this.projected.x, this.projected.y, this.projected.z, 1).applyMatrix4(camera.projectionMatrix), depth: -this.projected.z});
@@ -311,6 +359,8 @@ export class PointCloudLabelTool {
 		this.numbers = new WeakMap();
 		this.texts = new WeakMap();
 		this.scene = null;
+		// Release host closures when the label lifecycle ends.
+		this.anchorResolver = null;
 	}
 
 	/** A scene switch starts a fresh sequence and discards scene-specific overrides. */

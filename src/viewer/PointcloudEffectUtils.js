@@ -256,9 +256,10 @@ export function getPointcloudEffectState(pointcloud, edlSupported = true, applyL
 	// Serialization opts out; effect normalization already reads only the base state.
 	const active = applyLabelAppearance ? getPointCloudLabelAppearance(pointcloud) : undefined;
 	if (active !== undefined) {
-		state.edlEnabled = false;
-		// Both selected roles use Xray without changing their saved effect preferences.
-		state.xrayEnabled = active === true || active === "secondary";
+		// Selected roles use EDL; unselected members use Xray without changing saved preferences.
+		const selected = active === true || active === "secondary";
+		state.edlEnabled = selected && Boolean(edlSupported);
+		state.xrayEnabled = !selected;
 	}
 	return state;
 }

@@ -513,10 +513,10 @@ it("label selection survives TreeTag effect updates", () => {
 	setPointCloudLabelAppearance(active, true);
 	setPointCloudLabelAppearance(inactive, false);
 	try {
-		// TreeTag updates base preferences while label selection Xray retains priority.
+		// TreeTag updates base preferences while selected EDL and unselected Xray retain priority.
 		tool.setHighlightedPointclouds([inactive]);
-		expect(getPointcloudEffectState(active)).toMatchObject({edlEnabled: false, xrayEnabled: true});
-		expect(getPointcloudEffectState(inactive)).toMatchObject({edlEnabled: false, xrayEnabled: false});
+		expect(getPointcloudEffectState(active)).toMatchObject({edlEnabled: true, xrayEnabled: false});
+		expect(getPointcloudEffectState(inactive)).toMatchObject({edlEnabled: false, xrayEnabled: true});
 		setPointCloudLabelAppearance(active, null);
 		setPointCloudLabelAppearance(inactive, null);
 		expect(getPointcloudEffectState(inactive).edlEnabled).toBe(true);

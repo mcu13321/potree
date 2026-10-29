@@ -165,24 +165,36 @@ describe("label appearance effect priority", () => {
 	it("overrides reads without persisting transient selection through normalization or setters", () => {
 		// Latest base preferences survive both active and inactive rendering overrides.
 		const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
-		// Both alignment roles use Xray while base preferences remain unchanged.
+		// Both alignment roles use EDL while base preferences remain unchanged.
 		setPointCloudLabelAppearance(pc, "secondary");
-		expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: true, xrayOpacity: 0.25});
+		expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
 		setPointcloudEDLEnabled(pc, true);
 		expect(pc.userData).toMatchObject({edlEnabled: true, xrayEnabled: false});
 		setPointCloudLabelAppearance(pc, false);
 		expect(hasVisibleEDLEffect([pc])).toBe(false);
 		expect(partitionPointcloudsByEDL([pc])).toEqual({edlPointclouds: [], regularPointclouds: [pc]});
 		setPointcloudXRAYEnabled(pc, true);
-		expect(getPointcloudEffectState(pc).xrayEnabled).toBe(false);
+		expect(getPointcloudEffectState(pc).xrayEnabled).toBe(true);
 		expect(pc.userData.xrayEnabled).toBe(true);
-		// Both selected roles enable Xray while serialization keeps the base preferences.
+		// Serialization keeps the latest base preference even while EDL owns the visible effect.
 		for (const role of [true, "secondary"]) {
 			setPointCloudLabelAppearance(pc, role);
-			expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: true});
+			expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: true, xrayEnabled: false});
 			expect(getPointcloudEffectState(pc, true, false).xrayEnabled).toBe(true);
 		}
 		setPointCloudLabelAppearance(pc, null);
 		expect(getPointcloudEffectState(pc).xrayEnabled).toBe(true);
+	});
+
+	// Unsupported EDL must degrade selected roles to plain color, never to Xray.
+	it("respects EDL capability without altering selected or inactive base preferences", () => {
+		const pc = createPointcloud({edlEnabled: false, xrayEnabled: true});
+		for (const role of [true, "secondary", false]) {
+			setPointCloudLabelAppearance(pc, role);
+			expect(getPointcloudEffectState(pc, false)).toMatchObject({edlEnabled: false, xrayEnabled: role === false});
+			expect(pc.userData).toEqual({edlEnabled: false, xrayEnabled: true});
+		}
+		setPointCloudLabelAppearance(pc, null);
+		expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: true});
 	});
 });

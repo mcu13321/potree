@@ -214,10 +214,16 @@ describe("Render effect routing", () => {
 		expect(uniforms.uOrthographicHeight.value).toBe(1);
 	});
 
-	it("HQ 渲染器应编排普通、XRAY 和 EDL 独立 pass", () => {
+	// Exercise the same HQ pipeline with saved preferences and with transient selection roles.
+	it.each([false, true])("routes ordinary, Xray and EDL HQ passes with selection=%s", selected => {
 		const pc1 = createPointcloud("pc1", { edlEnabled: true });
 		const pc2 = createPointcloud("pc2");
 		const pc3 = createPointcloud("pc3", { xrayEnabled: true });
+		if (selected) {
+			setPointCloudLabelAppearance(pc1, true);
+			setPointCloudLabelAppearance(pc2, "secondary");
+			setPointCloudLabelAppearance(pc3, false);
+		}
 		const viewer = createViewerForEffectRender([pc1, pc2, pc3], "group");
 		viewer.getXrayRenderSettings = vi.fn(() => ({
 			densityScale: 2,
@@ -266,15 +272,17 @@ describe("Render effect routing", () => {
 		renderer.render({ camera: createCamera() });
 
 		expect(renderer._renderPointcloudGroup).toHaveBeenCalledTimes(2);
-		expect(renderer._renderPointcloudGroup.mock.calls[0][0].pointclouds).toEqual([pc2]);
-		expect(renderer._renderPointcloudGroup.mock.calls[1][0].pointclouds).toEqual([pc1]);
+		expect(renderer._renderPointcloudGroup.mock.calls[0][0].pointclouds).toEqual(selected ? [] : [pc2]);
+		expect(renderer._renderPointcloudGroup.mock.calls[1][0].pointclouds).toEqual(selected ? [pc1, pc2] : [pc1]);
 		expect(renderer.xrayPipeline.renderToTargets.mock.calls[0][0].pointclouds).toEqual([pc3]);
 		expect(renderer.xrayPipeline.resolve).toHaveBeenCalledWith(viewer.getXrayRenderSettings());
-		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(2);
-		expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
-		expect(renderer._renderNormalizationPass.mock.calls[1][0].useEDL).toBe(true);
+		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(selected ? 1 : 2);
+		if (!selected) expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
+		const edlPass = renderer._renderNormalizationPass.mock.calls.at(-1)[0];
+		expect(edlPass.useEDL).toBe(true);
 		// Normalization must receive the same camera used by its depth pass.
-		expect(renderer._renderNormalizationPass.mock.calls[1][0].camera).toBe(renderer._renderPointcloudGroup.mock.calls[1][0].camera);
+		expect(edlPass.camera).toBe(renderer._renderPointcloudGroup.mock.calls[1][0].camera);
+		for (const cloud of [pc1, pc2, pc3]) setPointCloudLabelAppearance(cloud, null);
 	});
 
 	it("标准渲染器应为多点云 XRAY 写入动态透明度", () => {
@@ -382,10 +390,24 @@ describe("Render effect routing", () => {
 import {setPointCloudLabelAppearance, setPointCloudAlignmentHidden, setPointCloudStationHidden, getAlignmentPointClouds} from "../src/utils/PointCloudLabelAppearance.js";
 
 describe("label tint at the actual octree draw boundary", () => {
+	// Xray changes the inactive rendering effect without replacing its source color attribute.
+	it("preserves inactive cloud colors at the draw boundary", () => {
+		const renderer = new PotreeGLRenderer(createRendererMock()), pc = createPointcloud("inactive");
+		pc.material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456)};
+		setPointCloudLabelAppearance(pc, false);
+		vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation(() => {
+			expect(pc.material.activeAttributeName).toBe("rgba");
+			expect(pc.material.color.getHex()).toBe(0x123456);
+		});
+		renderer.renderOctree(pc, [], createCamera(), null, {});
+		setPointCloudLabelAppearance(pc, null);
+	});
+
 	it("tints color and cached pass materials for both roles, restoring source state after a failed draw", () => {
 		const renderer = new PotreeGLRenderer(createRendererMock());
 		const pc = createPointcloud("active");
-		pc.material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456)};
+		// EDL color materials must receive the same role tint as cached attribute materials.
+		pc.material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456), useEDL: true};
 		setPointCloudLabelAppearance(pc, true);
 		const pass = {activeAttributeName: "intensity", color: new THREE.Color(0xabcdef)};
 		let expectedRoleColor = 0x0088ff;
@@ -425,20 +447,22 @@ describe("label tint at the actual octree draw boundary", () => {
 		setPointCloudLabelAppearance(pc, null);
 	});
 
-	it("routes both selected roles to Xray and inactive EDL clouds to ordinary rendering", () => {
+	it("routes both selected roles to EDL and inactive clouds to Xray", () => {
 		const active = createPointcloud("active", {xrayEnabled: true});
 		const inactive = createPointcloud("inactive", {edlEnabled: true});
+		active.material.uniforms = {visibleNodes: {value: null}, octreeSize: {value: 0}};
 		setPointCloudLabelAppearance(active, true);
 		setPointCloudLabelAppearance(inactive, false);
 		const renderer = new EDLRenderer(createViewerForEffectRender([active, inactive]));
-		expect(renderer._getPointcloudGroups([active, inactive])).toEqual({edlPointclouds: [], regularPointclouds: [active, inactive]});
-		// Both roles enable Xray without changing the stored preference.
+		expect(renderer._getPointcloudGroups([active, inactive])).toEqual({edlPointclouds: [active], regularPointclouds: [inactive]});
+		// Configure both passes to verify actual material flags, not just state resolution.
 		for (const role of [true, "secondary"]) {
 			setPointCloudLabelAppearance(active, role);
-			renderer._configureRegularPointclouds([active, inactive], createCamera(), false);
-			expect(active.material.useXRAY).toBe(true);
-			expect(inactive.material.useXRAY).toBe(false);
-			expect(active.material.useEDL).toBe(false);
+			renderer._configureRegularPointclouds([inactive], createCamera(), false);
+			renderer._configureEDLPointclouds([active], 800, 600);
+			expect(active.material.useXRAY).toBe(false);
+			expect(inactive.material.useXRAY).toBe(true);
+			expect(active.material.useEDL).toBe(true);
 			expect(inactive.material.useEDL).toBe(false);
 		}
 		expect(active.userData.xrayEnabled).toBe(true);

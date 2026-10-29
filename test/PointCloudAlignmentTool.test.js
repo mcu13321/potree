@@ -98,7 +98,7 @@ describe("opt-in point-cloud alignment", () => {
 		expect(tool.getState().phase).toBe("waiting");
 	});
 
-	it("switches the sole yellow target while restoring a visible locked blue source", () => {
+	it("locks the sole yellow reference and leaves only the blue source label interactive", () => {
 		const {viewer, labels, clouds: [a, b, c]} = fixture();
 		labels.setActivePointCloud(a);
 		const primaryChanged = vi.fn(), alignmentChanged = vi.fn();
@@ -112,7 +112,7 @@ describe("opt-in point-cloud alignment", () => {
 		// Paired primary labels are now live translation handles, but remain selection-locked.
 		expect(labels.labels.get(a).disabled).toBe(false);
 		expect(labels.labels.get(a).style.backgroundColor).toBe("rgb(28, 126, 253)");
-		// Primary, secondary and ordinary labels share one palette while cloud Xray roles remain distinct.
+		// Label styles stay uniform while selected clouds use EDL and other clouds use Xray.
 		for (const property of ["backgroundColor", "borderColor", "borderWidth", "color", "boxShadow", "width", "height"]) {
 			expect(labels.labels.get(b).style[property]).toBe(labels.labels.get(c).style[property]);
 			expect(labels.labels.get(a).style[property]).toBe(labels.labels.get(c).style[property]);
@@ -120,22 +120,78 @@ describe("opt-in point-cloud alignment", () => {
 		expect(labels.labels.get(b).style.backgroundColor).toBe("rgb(28, 126, 253)");
 		expect(labels.labels.get(b).style.width).toBe("40px");
 		expect(labels.labels.get(b).style.borderWidth).toBe("2px");
-		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: true, edlEnabled: false});
-		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: true, edlEnabled: false});
+		expect(getPointcloudEffectState(a)).toMatchObject({xrayEnabled: false, edlEnabled: true});
+		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: false, edlEnabled: true});
+		expect(getPointcloudEffectState(c)).toMatchObject({xrayEnabled: true, edlEnabled: false});
 		withPointCloudLabelColor(b, b.material, () => expect(b.material.color.getHex()).toBe(0xffd400));
 		expect(b.material.activeAttributeName).toBe("rgba");
 		expect(b.material.color.getHex()).toBe(0x123456);
 		labels.labels.get(b).click(); labels.labels.get(a).click();
 		expect(alignmentChanged).toHaveBeenCalledTimes(2);
 		labels.labels.get(c).click();
-		expect(getPointCloudLabelAppearance(b)).toBe(false);
-		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: false, edlEnabled: false});
+		// Neither native activation nor direct API changes may replace a paired reference.
+		expect(() => tool.setActive2PointCloud(c)).toThrow("locked");
+		expect(() => tool.setActive2PointCloud(null)).toThrow("locked");
+		expect(tool.setActive2PointCloud(b)).toBe(tool);
+		expect(() => tool.setActive2PointCloud(a)).toThrow(RangeError);
+		expect(() => tool.setActive2PointCloud(new THREE.Object3D())).toThrow(RangeError);
+		expect(getPointCloudLabelAppearance(b)).toBe("secondary");
+		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: false, edlEnabled: true});
+		expect(getPointcloudEffectState(c)).toMatchObject({xrayEnabled: true, edlEnabled: false});
 		expect(labels.labels.get(b).style.borderColor).toBe("rgb(255, 255, 255)");
-		expect(tool.getState().active2Pointcloud).toBe(c);
+		expect(tool.getState().active2Pointcloud).toBe(b);
 		expect(primaryChanged).not.toHaveBeenCalled();
-		tool.setActive2PointCloud(null);
-		expect(tool.getState().phase).toBe("waiting");
-		expect(isPointCloudAlignmentHidden(a)).toBe(true);
+		expect(alignmentChanged).toHaveBeenCalledTimes(2);
+		for (const cloud of [b, c]) {
+			expect(labels.labels.get(cloud).disabled).toBe(true);
+			expect(labels.labels.get(cloud).style.pointerEvents).toBe("none");
+		}
+		expect(labels.labels.get(a).style.pointerEvents).toBe("auto");
+		expect(isPointCloudAlignmentHidden(a)).toBe(false);
+	});
+
+	it("releases pending label capture, rejects synthetic input and restores late labels after exit", () => {
+		const {viewer, labels, clouds: [a, b, c], scene} = fixture();
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment(), reference = labels.labels.get(b);
+		expect(reference.disabled).toBe(false);
+		expect(labels.labels.get(a).disabled).toBe(true);
+		reference.hasPointerCapture = vi.fn(() => true);
+		reference.releasePointerCapture = vi.fn();
+		// A host may choose the reference while an ordinary label still owns a pending press.
+		alignmentPointer(reference, "pointerdown", 450, 300, 9);
+		expect(labels.gesture.id).toBe(9);
+		tool.setActive2PointCloud(b);
+		expect(reference.releasePointerCapture).toHaveBeenCalledWith(9);
+		expect(labels.gesture).toBeNull();
+		const matrix = a.matrix.clone();
+		for (const cloud of [b, c]) {
+			const button = labels.labels.get(cloud);
+			for (const type of ["pointerdown", "pointermove", "pointerup"]) alignmentPointer(button, type, 400, 300);
+			button.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+			for (const detail of [0, 1]) button.dispatchEvent(new MouseEvent("click", {detail, bubbles: true, cancelable: true}));
+		}
+		expect(labels.gesture).toBeNull();
+		expect(a.matrix.equals(matrix)).toBe(true);
+		expect(tool.active2PointCloud).toBe(b);
+		const added = new THREE.Object3D();
+		added.boundingBox = a.boundingBox.clone();
+		scene.pointclouds.push(added);
+		scene.dispatchEvent({type: "pointcloud_added", pointcloud: added});
+		expect(labels.labels.get(added).disabled).toBe(true);
+		expect(labels.labels.get(added).style.pointerEvents).toBe("none");
+		viewer.dispatchEvent({type: "view_mode_changed"});
+		labels.setVisible(false); labels.setVisible(true);
+		expect(tool.active2PointCloud).toBe(b);
+		tool.cancel();
+		for (const button of labels.labels.values()) {
+			expect(button.disabled).toBe(false);
+			expect(button.style.pointerEvents).toBe("auto");
+		}
+		// A fresh transaction may select a different reference after the old lock is released.
+		const next = viewer.enablePointCloudAlignment();
+		next.setActive2PointCloud(c);
+		expect(next.active2PointCloud).toBe(c);
 	});
 
 	it("preserves alignment while labels are hidden for screenshots and restores normal selection on exit", () => {
@@ -165,8 +221,11 @@ describe("opt-in point-cloud alignment", () => {
 		tool.setActive2PointCloud(b);
 		scene.pointclouds = [a, c];
 		scene.dispatchEvent({type: "pointcloud_removed", pointcloud: b});
-		expect(tool.getState().phase).toBe("waiting");
-		expect(isPointCloudAlignmentHidden(a)).toBe(true);
+		// Removing the reference cancels the transaction instead of permitting another reference.
+		expect(tool.getState().phase).toBe("idle");
+		expect(viewer.pointCloudAlignmentTool).toBeNull();
+		expect(isPointCloudAlignmentHidden(a)).toBe(false);
+		expect(labels.labels.get(c).style.pointerEvents).toBe("auto");
 		scene.pointclouds = [c];
 		scene.dispatchEvent({type: "pointcloud_removed", pointcloud: a});
 		expect(viewer.pointCloudAlignmentTool).toBeNull();
@@ -216,6 +275,76 @@ describe("alignment transform gizmo", () => {
 		viewers.splice(0).forEach(viewer => {viewer.disablePointCloudAlignment(); viewer.disablePointCloudLabels();});
 		document.body.replaceChildren();
 		vi.restoreAllMocks();
+	});
+
+	// The displayed anchor is also the mathematical pivot, including under transformed parents.
+	it.each([false, true])("rotates about a custom anchor and preserves cancel/commit semantics (orthographic=%s)", orthographic => {
+		const {viewer, labels, scene, clouds: [a, b]} = fixture();
+		const parent = new THREE.Object3D();
+		parent.position.set(2, -1, 0);
+		parent.rotation.z = 0.4;
+		parent.add(a);
+		a.position.set(-2, 1, 0);
+		if (orthographic) {
+			const camera = new THREE.OrthographicCamera(-10, 10, 7.5, -7.5, 0.1, 1000);
+			camera.position.set(0, 0, 20); camera.lookAt(0, 0, 0);
+			scene.getActiveCamera = () => camera;
+		}
+		labels.setAnchorResolver((pc, target) => target.set(1, 2, 1.2).applyMatrix4(pc.matrixWorld));
+		labels.setActivePointCloud(a);
+		const original = a.matrix.clone(), target = b.matrix.clone(), anchor = labels.getWorldAnchor(a);
+		let tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		const rotate = () => {
+			const ring = tool.gizmo.rotationRings[1];
+			const x = parseFloat(labels.labels.get(a).style.left), y = parseFloat(labels.labels.get(a).style.top);
+			alignmentPointer(ring, "pointerdown", x + 89, y);
+			expect(tool.gizmo.gesture.center.distanceTo(anchor)).toBeLessThan(1e-9);
+			alignmentPointer(ring, "pointermove", x, y - 89);
+			alignmentPointer(ring, "pointerup", x, y - 89);
+		};
+		rotate();
+		expect(labels.getWorldAnchor(a).distanceTo(anchor)).toBeLessThan(1e-8);
+		expect(a.matrix.equals(original)).toBe(false);
+		expect(b.matrix.equals(target)).toBe(true);
+		tool.cancel();
+		expect(a.matrix.equals(original)).toBe(true);
+		tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		rotate();
+		const result = a.matrix.clone();
+		expect(tool.commit()).toBe(true);
+		expect(a.matrix.equals(result)).toBe(true);
+		expect(labels.getWorldAnchor(a).distanceTo(anchor)).toBeLessThan(1e-8);
+	});
+
+	it("carries custom anchor height during side-view translation and cancels a press before resolver replacement", () => {
+		const {viewer, labels, camera, clouds: [a, b]} = fixture();
+		const resolver = (pc, target) => target.set(1, 0, 1.2).applyMatrix4(pc.matrixWorld);
+		labels.setAnchorResolver(resolver);
+		labels.setActivePointCloud(a);
+		const tool = viewer.enablePointCloudAlignment();
+		tool.setActive2PointCloud(b);
+		viewer.getViewMode = () => "front";
+		camera.position.set(0, -20, 0); camera.up.set(0, 0, 1); camera.lookAt(0, 0, 0);
+		labels.update();
+		const label = labels.labels.get(a), initial = a.matrix.clone(), anchor = labels.getWorldAnchor(a);
+		const x = parseFloat(label.style.left), y = parseFloat(label.style.top);
+		alignmentPointer(label, "pointerdown", x, y);
+		alignmentPointer(label, "pointermove", x, y - 40);
+		expect(labels.getWorldAnchor(a).z).toBeGreaterThan(anchor.z);
+		expect(labels.getWorldAnchor(a).z - anchor.z).toBeCloseTo(a.position.z);
+		expect(tool.gizmo.rotationHandle.style.display).toBe("none");
+		// Setting the same resolver is idempotent and must not interrupt a valid press.
+		labels.setAnchorResolver(resolver);
+		expect(tool.gizmo.gesture).not.toBeNull();
+		labels.setAnchorResolver(null);
+		expect(tool.gizmo.gesture).toBeNull();
+		expect(a.matrix.equals(initial)).toBe(true);
+		expect(viewer.inputHandler.enabled).toBe(true);
+		labels.setAnchorResolver(() => null);
+		expect(tool.gizmo.element.style.display).toBe("none");
+		expect(labels.labels.get(a).style.display).toBe("none");
 	});
 
 	it("shows only a paired, visible source and translates it without touching the target or camera", () => {
@@ -635,7 +764,7 @@ describe("alignment transform gizmo", () => {
 		expect(readout.style.display).toBe("none");
 	});
 
-	it("rotates around the label center, unwraps full turns and rolls back on target change or later", () => {
+	it("rotates around the label center, unwraps turns and preserves previews until explicit cancellation", () => {
 		const {viewer, labels, clouds: [a, b, c]} = fixture();
 		labels.setActivePointCloud(a);
 		const tool = viewer.enablePointCloudAlignment();
@@ -650,10 +779,15 @@ describe("alignment transform gizmo", () => {
 		expect(a.rotation.z).toBeCloseTo(Math.PI / 2, 7);
 		tool.setActive2PointCloud(b);
 		expect(a.rotation.z).toBeCloseTo(Math.PI / 2, 7);
-		tool.setActive2PointCloud(c);
-		expect(a.rotation.z).toBeCloseTo(0, 10);
+		// Rejected reference changes must not roll back completed rotation previews.
+		expect(() => tool.setActive2PointCloud(c)).toThrow("locked");
+		expect(() => tool.setActive2PointCloud(null)).toThrow("locked");
+		expect(a.rotation.z).toBeCloseTo(Math.PI / 2, 7);
 		const label = labels.labels.get(a);
 		alignmentPointer(label, "pointerdown", 400, 300);
+		const gesture = tool.gizmo.gesture;
+		expect(() => tool.setActive2PointCloud(c)).toThrow("locked");
+		expect(tool.gizmo.gesture).toBe(gesture);
 		alignmentPointer(label, "pointerup", 430, 300);
 		expect(a.position.x).toBeGreaterThan(0);
 		tool.cancel();
@@ -752,10 +886,17 @@ describe("alignment input ownership edges", () => {
 			alignmentPointer(label, "pointerup", 430, 300);
 			expect(a.position.x).toBeGreaterThan(0);
 			if (ending === "target") {
+				// Reference removal must release a live primary capture as well as completed previews.
+				const x = parseFloat(label.style.left), y = parseFloat(label.style.top);
+				alignmentPointer(label, "pointerdown", x, y);
+				alignmentPointer(label, "pointermove", x + 30, y);
+				expect(tool.gizmo.gesture).not.toBeNull();
 				scene.pointclouds = [a];
 				scene.dispatchEvent({type: "pointcloud_removed", pointcloud: b});
-				expect(tool.getState().phase).toBe("waiting");
-				expect(tool.gizmo.element.style.display).toBe("none");
+				expect(tool.getState().phase).toBe("idle");
+				expect(viewer.pointCloudAlignmentTool).toBeNull();
+				expect(tool.gizmo.element.isConnected).toBe(false);
+				expect(tool.gizmo.gesture).toBeNull();
 			} else if (ending === "scene") {
 				viewer.scene = makeScene([b]);
 				viewer.dispatchEvent({type: "scene_changed"});
