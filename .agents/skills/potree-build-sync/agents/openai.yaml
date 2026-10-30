@@ -1,0 +1,4 @@
+interface:
+  display_name: "Potree 构建与同步"
+  short_description: "统一 Potree 版本递增、完整构建、版本记录与外层项目产物同步"
+  default_prompt: "使用 $potree-build-sync 构建 Potree，验证版本记录并同步到当前指定的外层项目。"

@@ -108,11 +108,9 @@ ensureFJDCameraControlsInstalled();
 
 export const workerPool = new WorkerPool();
 
-export const version = {
-	major: 1,
-	minor: 8,
-	suffix: '.0'
-};
+// Derive the existing public version shape from the package version authority.
+export {version} from "./releaseVersion.js";
+import {version} from "./releaseVersion.js";
 
 export let lru = new LRU();
 

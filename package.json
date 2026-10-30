@@ -1,7 +1,7 @@
 {
   "name": "potree",
   "private": true,
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "WebGL point cloud viewer",
   "keywords": [
     "point",
@@ -18,9 +18,11 @@
   "main": "./build/potree/potree.js",
   "scripts": {
     "start": "gulp watch",
-    "build": "gulp build pack",
+    "build": "node scripts/build.mjs",
     "test": "vitest run",
-    "postinstall": "npm run build"
+    "postinstall": "npm run build",
+    "sync:build": "node scripts/sync-potree.mjs",
+    "verify:build": "node scripts/sync-potree.mjs --check"
   },
   "dependencies": {
     "gulp": "^5.0.1",

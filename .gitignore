@@ -30,3 +30,6 @@ libs/CesiumUnminified
 /pointclouds/morro_bay_converted
 /pointclouds/helimap_epalinges
 pointclouds/F
+# Local release records and build transaction ownership.
+/version.json
+/.potree-build.lock

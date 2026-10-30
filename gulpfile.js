@@ -1,7 +1,11 @@
 
 const path = require('path');
 const gulp = require('gulp');
-const exec = require('child_process').exec;
+// Await child-process failures and every binary-preserving asset pipeline.
+const {execFile} = require('node:child_process');
+const {pipeline} = require('node:stream/promises');
+const {promisify} = require('node:util');
+const execFileAsync = promisify(execFile);
 
 const fs = require("fs");
 const fsp = fs.promises;
@@ -107,32 +111,23 @@ gulp.task('test', async function() {
 
 });
 
-gulp.task("workers", async function(done){
-
-	for(let workerName of Object.keys(workers)){
-
-		gulp.src(workers[workerName])
-			.pipe(concat(`${workerName}.js`))
-			.pipe(gulp.dest('build/potree/workers'));
-	}
-
-	gulp.src('./libs/copc/laz-perf.wasm')
-		.pipe(gulp.dest('./build/potree/workers'));
-
-	done();
+// Preserve WASM and other binary inputs while waiting for all copies to finish.
+gulp.task("workers", async function(){
+  await Promise.all([
+    ...Object.entries(workers).map(([name, inputs]) => pipeline(
+      gulp.src(inputs, {encoding: false}),
+      concat(name + '.js'),
+      gulp.dest('build/potree/workers')
+    )),
+    pipeline(gulp.src('./libs/copc/laz-perf.wasm', {encoding: false}), gulp.dest('build/potree/workers'))
+  ]);
 });
 
-gulp.task("lazylibs", async function(done){
-
-	for(let libname of Object.keys(lazyLibs)){
-
-		const libpath = lazyLibs[libname];
-
-		gulp.src([`${libpath}/**/*`])
-			.pipe(gulp.dest(`build/potree/lazylibs/${libname}`));
-	}
-
-	done();
+gulp.task("lazylibs", async function(){
+  await Promise.all(Object.entries(lazyLibs).map(([name, source]) => pipeline(
+    gulp.src(source + '/**/*', {encoding: false}),
+    gulp.dest('build/potree/lazylibs/' + name)
+  )));
 });
 
 gulp.task("shaders", async function(){
@@ -163,29 +158,44 @@ gulp.task("shaders", async function(){
 	fs.writeFileSync(targetPath, content, {flag: "w"});
 });
 
-gulp.task('build', 
-	gulp.series(
-		gulp.parallel("workers", "lazylibs", "shaders", "icons_viewer", "examples_page"),
-		async function(done){
-			gulp.src(paths.html).pipe(gulp.dest('build/potree'));
+// Internal tasks are composed only by the versioned release transaction.
+gulp.task('assets', gulp.series(
+  gulp.parallel("workers", "lazylibs", "shaders", "icons_viewer", "examples_page"),
+  async function(){
+    await Promise.all([
+      pipeline(gulp.src(paths.html, {encoding: false}), gulp.dest('build/potree')),
+      pipeline(gulp.src(paths.resources, {encoding: false}), gulp.dest('build/potree/resources')),
+      pipeline(gulp.src(['LICENSE'], {encoding: false}), gulp.dest('build/potree'))
+    ]);
+  }
+));
 
-			gulp.src(paths.resources).pipe(gulp.dest('build/potree/resources'));
-
-			gulp.src(["LICENSE"]).pipe(gulp.dest('build/potree'));
-
-			done();
-		}
-	)
-);
-
-gulp.task("pack", async function(){
-	exec('rollup -c', function (err, stdout, stderr) {
-		console.log(stdout);
-		console.log(stderr);
-	});
+gulp.task('bundle', async function(){
+  const result = await execFileAsync(process.execPath, [require.resolve('rollup/dist/bin/rollup'), '-c'], {
+    cwd: __dirname,
+    maxBuffer: 16 * 1024 * 1024
+  });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
 });
 
-gulp.task('watch', gulp.parallel("build", "pack", "webserver", async function() {
+// A single CLI task prevents Gulp from running Rollup before shader generation.
+gulp.task('_compile', gulp.series('assets', 'bundle'));
+
+// Legacy "gulp build pack" performs one complete release, using the same CLI options as npm.
+async function releaseBuild(){
+  const {runBuild, parseBuildArgs} = await import('./scripts/build.mjs');
+  return runBuild({root: __dirname, ...parseBuildArgs(process.argv.slice(2), true)});
+}
+let releasePromise;
+function releaseOnce(){
+  return releasePromise ??= releaseBuild();
+}
+gulp.task('build', releaseOnce);
+gulp.task('pack', releaseOnce);
+
+// Watch rebuilds keep the pending version and refresh the complete manifest.
+gulp.task('watch', gulp.series(releaseBuild, gulp.parallel("webserver", async function() {
 
 	let watchlist = [
 		'src/**/*.js',
@@ -199,8 +209,6 @@ gulp.task('watch', gulp.parallel("build", "pack", "webserver", async function() 
 		'!resources/icons/index.html',
 	];
 
-	watch(watchlist, gulp.series("build", "pack"));
+	watch(watchlist, releaseBuild);
 
-}));
-
-
+})));

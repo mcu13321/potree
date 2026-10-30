@@ -1,3 +1,5 @@
+import packageInfo from "../package.json";
+import {version} from "../src/releaseVersion.js";
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -34,4 +36,9 @@ describe("Potree source regression", () => {
 		expect(existsSync("src/navigation/FJDCameraControlsTHREE.js")).toBe(false);
 		expect(existsSync("src/modules/fjd-camera-controls-core")).toBe(false);
 	});
+});
+
+// The public version keeps its legacy shape while following the package authority.
+it("derives the public version from package.json", () => {
+  expect(version.major + "." + version.minor + version.suffix).toBe(packageInfo.version);
 });
