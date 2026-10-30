@@ -1,6 +1,6 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {readFileSync} from "node:fs";
-import {beforeAll, describe, expect, test, vi} from "vitest";
+import {describe, expect, test, vi} from "vitest";
 import {FJDCameraControls} from "../src/FJDCameraControlsHost.js";
 import {
 	buildCrossSectionPreviewFrames,
@@ -123,7 +123,8 @@ describe("buildCrossSectionPreviewFrames", () => {
     expect(tool.group.children).toHaveLength(0);
     tool.setPreview({ ...preview, frameSideLength: 6.6 });
     expect(tool.group.children.length).toBeGreaterThan(0);
-    expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
+    // Geometry-only mocks have no measurable camera viewport.
+    expect(tool.needsFit).toBe(true);
     tool.setPreview({ ...preview, sectionStep: 10, frameSideLength: 6.6 });
     expect(tool.frameSideLength).toBeCloseTo(6.6);
     expect(request).not.toHaveBeenCalled();
@@ -144,185 +145,169 @@ describe("buildCrossSectionPreviewFrames", () => {
 	});
 });
 
-describe("cross-section preview initialization camera", () => {
-	let Viewer;
 
-	beforeAll(async () => {
-		// Load the real initialization entry without the unrelated map projection dependency.
-		vi.stubGlobal("proj4", {defs: vi.fn()});
-		({Viewer} = await import("../src/viewer/viewer.js"));
-	});
-
-	// Keep rendering mocked while exercising real Viewer and FJD camera calculations.
-	function createPreviewViewer(projection) {
+describe("cross-section axis camera framing", () => {
+	// Keep only drawing mocked; pose application and point projection use real native code.
+	function createViewer(projection, points = [[-40, -20, 2], [0, 50, 8], [60, 15, 5]]) {
 		const camera = projection === "perspective"
-			? new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 10000)
-			: new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, 10000);
+			? new THREE.PerspectiveCamera(60, 1200 / 800, 0.1, 100000)
+			: new THREE.OrthographicCamera(-90, 90, 60, -60, 0.1, 100000);
 		camera.up.set(0, 0, 1);
+		// The standalone host installs its THREE dependency explicitly.
+		FJDCameraControls.install({THREE});
 		const controls = new FJDCameraControls(camera);
-		controls.usesRigidTopViewFit = true;
-		let profileCallbacks;
-		const main = {
-			baseUrl: "project/main",
-			position: new THREE.Vector3(),
-			boundingBox: new THREE.Box3(
-				new THREE.Vector3(-20, -5, 0),
-				new THREE.Vector3(20, 5, 10),
-			),
-			getPointsInProfile: (_profile, _depth, callbacks) => {
-				profileCallbacks = callbacks;
-				return {cancel: () => {}};
-			},
-		};
-		const scene = {
-			pointclouds: [main],
-			measurements: [{
-				uuid: "axis-camera",
-				getRenderablePaths: () => [{
-					points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(20, 0, 0)],
-				}],
-			}],
-			view: {radius: 0},
-			getActiveCamera: () => camera,
-			getBoundingBox: (pointclouds) => pointclouds.reduce(
-				(bounds, pointcloud) => bounds.union(pointcloud.boundingBox),
-				new THREE.Box3(),
-			),
-		};
+		const axis = {uuid: "axis", getRenderablePaths: () => [{points: points.map(point => new THREE.Vector3(...point))}]};
+		const events = [];
 		const viewer = {
-			controls,
-			scene,
-			addEventListener: () => {},
-			removeEventListener: () => {},
-			renderer: {getSize: (target) => target.set(800, 600), render: () => {}},
-			getBoundingBox: (pointclouds) => scene.getBoundingBox(pointclouds),
+			controls, addEventListener() {}, removeEventListener() {},
+			dispatchEvent: event => events.push(event.type),
+			scene: {measurements: [axis], pointclouds: [], getActiveCamera: () => camera,
+				getBoundingBox: clouds => clouds.reduce((box, cloud) => box.union(cloud.boundingBox), new THREE.Box3())},
+			renderer: {domElement: {clientWidth: 1200, clientHeight: 800}, getSize: target => target.set(1200, 800)},
+			render: () => {camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);},
 		};
-		viewer.setTopView4CameraControls = vi.fn((...args) =>
-			Viewer.prototype.setTopView4CameraControls.apply(viewer, args),
-		);
 		const tool = new CrossSectionPreviewTool(viewer);
-		viewer.crossSectionPreviewTool = tool;
-		const preview = {
-			axisUuid: "axis-camera",
-			mainPointCloudBaseUrl: main.baseUrl,
-			sectionStart: 0,
-			sectionEnd: 20,
-			sectionStep: 10,
-			sectionThickness: 0.2,
-			frameSideLength: 6.6,
-		};
-		viewer.setTopView4CameraControls(false);
-		const initialPose = controls.getRigidPose();
-		viewer.setTopView4CameraControls.mockClear();
-		return {camera, controls, main, viewer, tool, preview, initialPose,
-			finishProfile: () => {
-				// A final-size update must preserve user navigation.
-				tool.setPreview({...preview, frameSideLength: 6.6});
-			},
-		};
+		const viewport = {x: 300, y: 160, width: 640, height: 480};
+		const preview = {axisUuid: "axis", mainPointCloudBaseUrl: "main", cameraViewport: viewport,
+			sectionStart: 0, sectionEnd: 20, sectionStep: 10, sectionThickness: 0.2, frameSideLength: 6.6};
+		return {camera, controls, axis, viewer, tool, viewport, preview, events};
 	}
 
-	// Compare the rendered pose as well as the controller target, allowing quaternion sign equivalence.
-	function expectCameraPose(controls, expected) {
-		expect(controls.camera.position.distanceTo(new THREE.Vector3(...expected.position))).toBeLessThan(1e-6);
-		expect(controls.camera.quaternion.angleTo(new THREE.Quaternion(...expected.quaternion))).toBeLessThan(1e-6);
-		expect(controls.getTarget(new THREE.Vector3()).distanceTo(new THREE.Vector3(...expected.orbitPoint))).toBeLessThan(1e-6);
-		expect(Math.abs(controls.camera.zoom - expected.zoom)).toBeLessThan(1e-6);
+	function project(camera, point) {
+		camera.updateMatrixWorld(true);
+		const projected = point.clone().project(camera);
+		return [(projected.x + 1) * 600, (1 - projected.y) * 400];
 	}
 
-	// Give the user a visibly different position, orientation and zoom before preview entry.
-	function moveCamera(controls) {
-		controls.setRigidPose({
-			position: [40, -30, 25],
-			quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0.2, 0.6)).toArray(),
-			orbitPoint: [5, 2, 1],
-			zoom: 2,
-		}, false);
-	}
-
-	test.each(["perspective", "orthographic"])("matches the complete initial %s pose after preview entry", (projection) => {
-		const {controls, tool, viewer, preview, initialPose} = createPreviewViewer(projection);
-		for (const moved of [false, true]) {
-			if (moved) moveCamera(controls);
-			tool.setPreview(preview);
-			expectCameraPose(controls, initialPose);
-			expect(viewer.setTopView4CameraControls).toHaveBeenLastCalledWith(false);
-			tool.clear();
+	function expectFramed(h) {
+		const points = h.axis.getRenderablePaths().flatMap(path => path.points);
+		const bounds = new THREE.Box3().setFromPoints(points);
+		const center = project(h.camera, bounds.getCenter(new THREE.Vector3()));
+		expect(center[0]).toBeCloseTo(h.viewport.x + h.viewport.width / 2, 6);
+		expect(center[1]).toBeCloseTo(h.viewport.y + h.viewport.height / 2, 6);
+		for (const point of points) {
+			const [x, y] = project(h.camera, point);
+			expect(x).toBeGreaterThanOrEqual(h.viewport.x - 1e-6);
+			expect(x).toBeLessThanOrEqual(h.viewport.x + h.viewport.width + 1e-6);
+			expect(y).toBeGreaterThanOrEqual(h.viewport.y - 1e-6);
+			expect(y).toBeLessThanOrEqual(h.viewport.y + h.viewport.height + 1e-6);
 		}
-		tool.dispose();
-	});
+		expect(h.camera.quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-6);
+		expect(h.controls.getTarget(new THREE.Vector3()).distanceTo(bounds.getCenter(new THREE.Vector3()))).toBeLessThan(1e-6);
+	}
 
-	test.each(["perspective", "orthographic"])("ignores oversized markers and unrelated clouds when framing the %s preview", (projection) => {
-		const {controls, main, tool, viewer, preview, initialPose} = createPreviewViewer(projection);
-		viewer.scene.pointclouds.push({
-			baseUrl: "project/unrelated",
-			boundingBox: new THREE.Box3(new THREE.Vector3(-1000, -1000, -1000), new THREE.Vector3(1000, 1000, 1000)),
-		});
-		moveCamera(controls);
-		tool.setPreview({...preview, sectionThickness: 100});
-		expect(main.boundingBox.containsBox(new THREE.Box3().setFromObject(tool.group))).toBe(false);
-		expectCameraPose(controls, initialPose);
-		tool.dispose();
-	});
-
-	test.each(["perspective", "orthographic"])("preserves user navigation during %s refinement and resets on a new preview", (projection) => {
-		const {controls, tool, viewer, preview, initialPose, finishProfile} = createPreviewViewer(projection);
-		tool.setPreview(preview);
-		moveCamera(controls);
-		const userPose = controls.getRigidPose();
-		finishProfile();
-		expect(tool.frameSideLength).toBeCloseTo(6.6);
-		expectCameraPose(controls, userPose);
-		tool.setPreview({...preview, activeIndex: 1});
-		expectCameraPose(controls, userPose);
-		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
-		tool.clear();
-		expectCameraPose(controls, userPose);
-		tool.setPreview(preview);
-		expectCameraPose(controls, initialPose);
-		moveCamera(controls);
-		tool.setPreview({...preview, sectionStep: 5});
-		expectCameraPose(controls, initialPose);
-		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(3);
-		tool.dispose();
-	});
-
-
-	// Alignment updates must move the frames while preserving the complete user camera pose.
-	test.each(["perspective", "orthographic"])("preserves user navigation when switching %s preview alignment", (projection) => {
-		const {controls, tool, viewer, preview} = createPreviewViewer(projection);
-		tool.setPreview({...preview, axisAnchor: "center"});
-		moveCamera(controls);
-		const userPose = controls.getRigidPose();
-		const centerBounds = new THREE.Box3().setFromObject(tool.group);
-		for (const axisAnchor of ["bottom", "center", "bottom"]) {
-			tool.setPreview({...preview, axisAnchor});
-			tool.update();
-			expectCameraPose(controls, userPose);
-			expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
-			const bounds = new THREE.Box3().setFromObject(tool.group);
-			expect(bounds.min.z).toBeCloseTo(centerBounds.min.z + (axisAnchor === "bottom" ? preview.frameSideLength / 2 : 0));
+	// Include curved samples, vertical/horizontal paths, depth, and sub-meter geometry.
+	test.each(["perspective", "orthographic"])("centers and contains the entire %s axis in the safe viewport", projection => {
+		for (const points of [undefined, [[0, 0, 0], [0, 100, 0]], [[0, 0, 0], [100, 0, 0]],
+			[[0, 0, 0], [0.3, 0.2, 0.1]], [[10000, -4000, -100], [10200, -3900, 100]]]) {
+			const h = createViewer(projection, points);
+			// Unrelated cloud extents must not affect axis framing.
+			h.viewer.scene.pointclouds.push({boundingBox: new THREE.Box3(new THREE.Vector3(-1e6, -1e6, -1e6), new THREE.Vector3(1e6, 1e6, 1e6))});
+			h.tool.setPreview(h.preview);
+			expectFramed(h);
+			expect(h.tool.needsFit).toBe(false);
+			expect(h.events).toEqual(["cross_section_preview_camera_fitted"]);
+			h.controls.update(1 / 60);
+			h.viewer.render();
+			expectFramed(h);
+			h.tool.dispose();
 		}
-		// A delayed size update must retain the new alignment and user navigation.
-		tool.setPreview({...preview, axisAnchor: "bottom", frameSideLength: 8});
-		expectCameraPose(controls, userPose);
-		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(1);
-		tool.clear();
-		tool.setPreview({...preview, axisAnchor: "bottom"});
-		expect(viewer.setTopView4CameraControls).toHaveBeenCalledTimes(2);
-		tool.dispose();
 	});
 
-	test.each(["missing", "hidden", "empty"])("does not move the camera when the main cloud is %s", (state) => {
-		const {controls, main, tool, viewer, preview} = createPreviewViewer("perspective");
-		moveCamera(controls);
-		const userPose = controls.getRigidPose();
-		if (state === "missing") viewer.scene.pointclouds = [];
-		if (state === "hidden") main.visible = false;
-		if (state === "empty") main.boundingBox.makeEmpty();
-		tool.setPreview(preview);
-		expectCameraPose(controls, userPose);
-		expect(viewer.setTopView4CameraControls).not.toHaveBeenCalled();
-		tool.dispose();
+	test.each(["perspective", "orthographic"])("keeps the %s user pose through parameter, size, and layout updates", projection => {
+		const h = createViewer(projection);
+		h.tool.setPreview(h.preview);
+		h.controls.setRigidPose({position: [100, -40, 30], quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0.2, 0.6)).toArray(), orbitPoint: [5, 2, 1], zoom: 2}, false);
+		const pose = h.controls.getRigidPose(false);
+		for (const change of [{sectionStep: 5}, {sectionStart: 1, sectionEnd: 10}, {sectionThickness: 100}, {frameSideLength: 8}, {axisAnchor: "bottom"}, {activeIndex: 1}]) {
+			h.tool.setPreview({...h.preview, ...change});
+			h.tool.update();
+			expect(h.controls.getRigidPose(false)).toEqual(pose);
+		}
+		h.viewport = {x: 0, y: 100, width: 500, height: 400};
+		h.tool.setCameraViewport(h.viewport);
+		h.tool.update();
+		expect(h.controls.getRigidPose(false)).toEqual(pose);
+		expect(h.events).toHaveLength(1);
+		h.tool.requestCameraFit();
+		expectFramed(h);
+		expect(h.events).toEqual(["cross_section_preview_camera_fitted", "cross_section_preview_camera_fit_requested", "cross_section_preview_camera_fitted"]);
+		h.tool.clear();
+		h.tool.setPreview(h.preview);
+		h.viewport = h.preview.cameraViewport;
+		expectFramed(h);
+		h.tool.dispose();
 	});
+
+	test("waits for late axis, canvas and viewport readiness without consuming the fit", () => {
+		const h = createViewer("orthographic");
+		h.viewer.scene.measurements = [];
+		h.viewer.renderer.domElement.clientWidth = 0;
+		h.tool.setPreview({...h.preview, cameraViewport: null});
+		h.tool.update();
+		expect(h.tool.needsFit).toBe(true);
+		h.viewer.scene.measurements = [h.axis];
+		h.viewer.renderer.domElement.clientWidth = 1200;
+		h.tool.update();
+		expect(h.events).toEqual([]);
+		h.tool.setCameraViewport(h.viewport);
+		h.tool.update();
+		expectFramed(h);
+		expect(h.events).toHaveLength(1);
+		// Closing a pending preview cancels retries and later reset requests.
+		h.tool.setCameraViewport({x: 0, y: 0, width: 0, height: 0});
+		h.tool.requestCameraFit();
+		expect(h.tool.needsFit).toBe(true);
+		h.tool.clear();
+		h.tool.setCameraViewport(h.viewport);
+		h.tool.update();
+		h.tool.requestCameraFit();
+		expect(h.events.filter(type => type === "cross_section_preview_camera_fitted")).toHaveLength(1);
+		h.tool.dispose();
+	});
+
+	test.each(["perspective", "orthographic"])("centers a degenerate %s XY extent while preserving zoom", projection => {
+		const h = createViewer(projection, [[4, 8, -2], [4, 8, 2]]);
+		h.controls.setRigidPose({position: [20, 0, 50], quaternion: [0, 0, 0, 1], orbitPoint: [20, 0, 0], zoom: 2}, false);
+		h.tool.setPreview(h.preview);
+		expectFramed(h);
+		expect(h.camera.zoom).toBe(2);
+		h.tool.dispose();
+	});
+	// A flat axis must occupy exactly the padded limiting dimension, even below one meter.
+	test.each(["perspective", "orthographic"])("uses axis scale and 1.05 padding for a small flat %s axis", projection => {
+		const h = createViewer(projection, [[0, 0, 0], [0.3, 0.2, 0]]);
+		h.tool.setPreview(h.preview);
+		const first = project(h.camera, new THREE.Vector3(0, 0, 0));
+		const last = project(h.camera, new THREE.Vector3(0.3, 0.2, 0));
+		expect(Math.max(Math.abs(last[0] - first[0]) / h.viewport.width, Math.abs(last[1] - first[1]) / h.viewport.height)).toBeCloseTo(1 / 1.05, 6);
+		expectFramed(h);
+		h.tool.dispose();
+	});
+
+	// Disconnected rendered paths contribute bounds without connecting their station geometry.
+	test.each(["perspective", "orthographic"])("frames every disconnected %s axis path", projection => {
+		const h = createViewer(projection);
+		h.axis.getRenderablePaths = () => [
+			{points: [new THREE.Vector3(-80, -20, 0), new THREE.Vector3(-40, 30, 10)]},
+			{points: [new THREE.Vector3(70, 60, 8), new THREE.Vector3(100, -60, 3)]},
+		];
+		h.tool.setPreview(h.preview);
+		expectFramed(h);
+		h.tool.dispose();
+	});
+
+	// Owned cloud height prevents roof clipping without allowing cloud width to shrink the axis.
+	test("keeps the orthographic camera above the roof while framing only the axis XY extent", () => {
+		const h = createViewer("orthographic", [[0, 0, 0], [100, 0, 0]]);
+		h.tool.setPreview(h.preview);
+		const axisZoom = h.camera.zoom;
+		h.viewer.scene.pointclouds.push({baseUrl: "main", boundingBox: new THREE.Box3(new THREE.Vector3(-1e5, -1e5, -10), new THREE.Vector3(1e5, 1e5, 100))});
+		h.tool.requestCameraFit();
+		expect(h.camera.position.z).toBeGreaterThan(100);
+		expect(h.camera.zoom).toBeCloseTo(axisZoom, 6);
+		expectFramed(h);
+		h.tool.dispose();
+	});
+
 });

@@ -4,6 +4,8 @@ import {LineSegments2} from "../../libs/three.js/lines/LineSegments2.js";
 import {LineSegmentsGeometry} from "../../libs/three.js/lines/LineSegmentsGeometry.js";
 
 const EPSILON = 1e-7;
+// Match the existing top-view margin inside the unobstructed canvas region.
+const CAMERA_FIT_PADDING = 1.05;
 const PREVIEW_GROUP_NAME = "potree_cross_section_preview";
 const NORMAL_SECTION_COLOR = 0xf25f5f;
 const ACTIVE_SECTION_COLOR = 0xef4444;
@@ -322,6 +324,7 @@ export class CrossSectionPreviewTool {
 		this.group.name = PREVIEW_GROUP_NAME;
 		this.preview = null;
 		this.previewShapeKey = null;
+		this.cameraViewport = null;
 		this.frameSideLength = null;
 		this.previewAxis = null;
 		this.previewAxisColor = null;
@@ -359,23 +362,29 @@ export class CrossSectionPreviewTool {
 			sectionStep: toFiniteNumber(config.sectionStep),
 			sectionThickness: toFiniteNumber(config.sectionThickness),
 		};
-		// Alignment changes rebuild geometry without starting another camera fit.
-		const shapeKey = JSON.stringify({
-			axisUuid: preview.axisUuid,
-			mainPointCloudBaseUrl: preview.mainPointCloudBaseUrl,
-			sectionEnd: preview.sectionEnd,
-			sectionStart: preview.sectionStart,
-			sectionStep: preview.sectionStep,
-			sectionThickness: preview.sectionThickness,
-		});
-		const isNewShape = shapeKey !== this.previewShapeKey;
-		this.needsFit ||= isNewShape;
+		// Only a new preview resource owns another initial fit; parameters preserve navigation.
+		const shapeKey = JSON.stringify([preview.axisUuid, preview.mainPointCloudBaseUrl]);
+		this.needsFit ||= shapeKey !== this.previewShapeKey;
+		this.setCameraViewport(config.cameraViewport);
 		// Size changes never invalidate the camera or restart a profile request.
 		this.frameSideLength = Number.isFinite(config.frameSideLength) && config.frameSideLength > EPSILON
 			? config.frameSideLength : null;
 		this.previewShapeKey = shapeKey;
 		this.preview = preview;
 		this.rebuild();
+	}
+
+	// Store CSS-pixel bounds without reframing after panel or window changes.
+	setCameraViewport(viewport) {
+		this.cameraViewport = viewport;
+	}
+
+	// Reset requests remain pending until both the axis and safe viewport are ready.
+	requestCameraFit() {
+		if (!this.preview) return;
+		this.viewer.dispatchEvent({type: "cross_section_preview_camera_fit_requested"});
+		this.needsFit = true;
+		this.fitToPreview();
 	}
 
 	setActiveIndex(activeIndex) {
@@ -460,8 +469,6 @@ export class CrossSectionPreviewTool {
 		const axis = this.getAxisMeasurement();
 		this.setPreviewAxisColor(axis);
 		const axisPaths = collectAxisPaths(axis);
-		const pointclouds = this.getPreviewPointclouds();
-		const pointCloudBounds = this.getPointCloudBounds(pointclouds);
 		const frames = buildCrossSectionPreviewFrames({
 			axisAnchor: this.preview?.axisAnchor,
 			axisPaths,
@@ -474,10 +481,7 @@ export class CrossSectionPreviewTool {
 		});
 		this.pendingGeometry = Boolean(this.preview) && axisPaths.length === 0;
 		// Initialize the view once on entry, not when asynchronous size calculation completes.
-		if (this.needsFit && axisPaths.length > 0 && pointCloudBounds) {
-			this.fitToPreview(pointCloudBounds);
-			this.needsFit = false;
-		}
+		if (this.needsFit) this.fitToPreview(axisPaths);
 		if (frames.length === 0) {
 			return;
 		}
@@ -513,18 +517,90 @@ export class CrossSectionPreviewTool {
 			}
 		}
 
-		if (this.needsFit) {
-			this.fitToPreview(pointCloudBounds);
-			this.needsFit = false;
-		}
 	}
 
-	fitToPreview(pointCloudBounds = this.getPointCloudBounds()) {
-		if (!pointCloudBounds) {
-			return;
+	// Fit all rendered axis samples, independently of clouds, stations, and preview markers.
+	fitToPreview(axisPaths = collectAxisPaths(this.getAxisMeasurement())) {
+		const viewport = this.cameraViewport;
+		const canvas = this.viewer.renderer?.domElement;
+		const width = canvas?.clientWidth;
+		const height = canvas?.clientHeight;
+		const controls = this.viewer.fjdCameraControls ?? this.viewer.controls ?? this.viewer.cameraControls;
+		if (!this.preview || !axisPaths.length || !controls?.setRigidPose || !(width > 0 && height > 0)
+			|| !viewport || ![viewport.x, viewport.y, viewport.width, viewport.height].every(Number.isFinite)) return false;
+		// Intersect again to reject a stale or temporarily collapsed host layout.
+		const left = Math.max(0, viewport.x);
+		const top = Math.max(0, viewport.y);
+		const right = Math.min(width, viewport.x + viewport.width);
+		const bottom = Math.min(height, viewport.y + viewport.height);
+		if (!(right > left && bottom > top)) return false;
+		const bounds = new THREE.Box3().setFromPoints(axisPaths.flat());
+		if (bounds.isEmpty()) return false;
+		// Settle the renderer-owned orthographic frustum before deriving its zoom.
+		this.viewer.setControls?.(controls);
+		this.viewer.render?.();
+		const camera = this.viewer.scene.getActiveCamera();
+		if (!camera?.isOrthographicCamera && !camera?.isPerspectiveCamera) return false;
+		const center = bounds.getCenter(new THREE.Vector3());
+		const size = bounds.getSize(new THREE.Vector3());
+		const ndcX = (left + right) / width - 1;
+		const ndcY = 1 - (top + bottom) / height;
+		const fractionX = (right - left) / width;
+		const fractionY = (bottom - top) / height;
+		const degenerate = size.x <= EPSILON && size.y <= EPSILON;
+		let zoom = camera.zoom > 0 ? camera.zoom : 1;
+		const nearPadding = Math.max(camera.near * 2, EPSILON);
+		// Perspective framing must not impose a meter-sized minimum on small axes.
+		let distance = size.z / 2 + (camera.isOrthographicCamera ? Math.max(size.z, 1, nearPadding) : nearPadding);
+		// Cloud height only prevents clipping the roof; axis extents still determine XY framing.
+		const cloudBounds = this.getPointCloudBounds();
+		if (cloudBounds) distance = Math.max(distance, cloudBounds.max.z - center.z + nearPadding);
+		const position = center.clone();
+		if (camera.isOrthographicCamera) {
+			const fieldWidth = camera.right - camera.left;
+			const fieldHeight = camera.top - camera.bottom;
+			if (!(fieldWidth > 0 && fieldHeight > 0)) return false;
+			if (!degenerate) {
+				zoom = Math.min(
+					size.x > EPSILON ? fieldWidth * fractionX / (size.x * CAMERA_FIT_PADDING) : Infinity,
+					size.y > EPSILON ? fieldHeight * fractionY / (size.y * CAMERA_FIT_PADDING) : Infinity,
+				);
+			}
+			// Pan the axis center to the safe-region center while retaining the top orientation.
+			position.x -= ndcX * fieldWidth / (2 * zoom);
+			position.y -= ndcY * fieldHeight / (2 * zoom);
+		} else {
+			if (!degenerate) zoom = 1;
+			const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / zoom;
+			const tanX = tanY * camera.aspect;
+			if (!(tanX > 0 && tanY > 0)) return false;
+			if (degenerate) {
+				// A vertical/point axis supplies no XY scale; keep the current viewing distance.
+				const pose = controls.getRigidPose(false);
+				distance = Math.max(distance, new THREE.Vector3(...pose.position).distanceTo(new THREE.Vector3(...pose.orbitPoint)));
+			} else {
+				// Account for depth when an off-center safe region is used in perspective.
+				for (const x of [bounds.min.x, bounds.max.x]) {
+					for (const y of [bounds.min.y, bounds.max.y]) {
+						for (const z of [bounds.min.z, bounds.max.z]) {
+							const depth = z - center.z;
+							distance = Math.max(distance,
+								depth + CAMERA_FIT_PADDING * Math.abs((x - center.x) / tanX + ndcX * depth) / fractionX,
+								depth + CAMERA_FIT_PADDING * Math.abs((y - center.y) / tanY + ndcY * depth) / fractionY);
+						}
+					}
+				}
+			}
+			position.x -= ndcX * tanX * distance;
+			position.y -= ndcY * tanY * distance;
 		}
-		// Reuse initialization framing, scoped by the Viewer to this preview's main cloud.
-		this.viewer.setTopView4CameraControls(false);
+		position.z += distance;
+		if (!isUsableVector(position) || !Number.isFinite(zoom) || zoom <= 0) return false;
+		// Potree's existing Z-up top view uses screen-right X and screen-up Y.
+		controls.setRigidPose({position: position.toArray(), quaternion: [0, 0, 0, 1], orbitPoint: center.toArray(), zoom}, false);
+		this.needsFit = false;
+		this.viewer.dispatchEvent({type: "cross_section_preview_camera_fitted"});
+		return true;
 	}
 
 	update() {
@@ -536,6 +612,9 @@ export class CrossSectionPreviewTool {
 		}
 		if (this.pendingGeometry) {
 			this.rebuild();
+		} else if (this.needsFit) {
+			// Retry readiness without reallocating preview geometry on every frame.
+			this.fitToPreview();
 		}
 	}
 
@@ -545,6 +624,7 @@ export class CrossSectionPreviewTool {
 
 	clear() {
 		this.preview = null;
+		this.cameraViewport = null;
 		this.previewShapeKey = null;
 		this.frameSideLength = null;
 		this.restorePreviewAxisColor();
