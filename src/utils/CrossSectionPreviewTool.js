@@ -7,7 +7,8 @@ const EPSILON = 1e-7;
 // Match the existing top-view margin inside the unobstructed canvas region.
 const CAMERA_FIT_PADDING = 1.05;
 const PREVIEW_GROUP_NAME = "potree_cross_section_preview";
-const NORMAL_SECTION_COLOR = 0xf25f5f;
+// Keep unselected frames neutral so the active red section remains distinct.
+const NORMAL_SECTION_COLOR = 0xffffff;
 const ACTIVE_SECTION_COLOR = 0xef4444;
 const PREVIEW_AXIS_COLOR = 0xfacc15;
 const ACTIVE_SECTION_OPACITY = 0.2;

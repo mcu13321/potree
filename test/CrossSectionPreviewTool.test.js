@@ -134,6 +134,37 @@ describe("buildCrossSectionPreviewFrames", () => {
     tool.dispose();
   });
 
+	// Exercise real materials and station changes instead of matching color constants in source.
+	test("keeps unselected sections white when the active red section changes", () => {
+		const axis = {
+			uuid: "axis",
+			color: new THREE.Color(0x123456),
+			getRenderablePaths: () => [{points: [new THREE.Vector3(), new THREE.Vector3(20, 0, 0)]}],
+		};
+		const tool = new CrossSectionPreviewTool({
+			addEventListener() {}, removeEventListener() {},
+			scene: {measurements: [axis]},
+		});
+		tool.setPreview({
+			axisUuid: "axis", activeIndex: 0, frameSideLength: 6,
+			sectionStart: 0, sectionEnd: 20, sectionStep: 10, sectionThickness: 0.2,
+		});
+		for (const activeIndex of [0, 1, 2, 0]) {
+			tool.setActiveIndex(activeIndex);
+			const [normalLine, activeLine, activeFill] = tool.group.children;
+			expect(tool.group.children).toHaveLength(3);
+			expect(normalLine.material.color.getHex()).toBe(0xffffff);
+			expect(activeLine.material.color.getHex()).toBe(0xef4444);
+			expect(activeFill.material.color.getHex()).toBe(0xef4444);
+			expect(activeFill.material.opacity).toBe(0.2);
+			// The previous active station must return to the white frame geometry.
+			expect(normalLine.geometry.attributes.instanceStart.getX(0)).toBe(activeIndex === 0 ? 10 : 0);
+			expect(axis.color.getHex()).toBe(0xfacc15);
+		}
+		tool.dispose();
+		expect(axis.color.getHex()).toBe(0x123456);
+	});
+
 	test("renders markers in Potree's three-dimensional overlay pass", () => {
 		const source = readFileSync("src/utils/CrossSectionPreviewTool.js", "utf8");
 		const viewerSource = readFileSync("src/viewer/viewer.js", "utf8");
