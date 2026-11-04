@@ -12,6 +12,7 @@ import {
 	syncPointcloudPassMaterial,
 } from "./PointcloudPassMaterialUtils.js";
 import {XraySplatPipeline} from "./XraySplatPipeline.js";
+import {partitionPointcloudsByOpacity, renderPointcloudOpacity} from "./PointcloudOpacityPipeline.js";
 
 export class HQSplatRenderer{
 
@@ -272,9 +273,10 @@ export class HQSplatRenderer{
 		const xrayPointclouds = regularPointclouds.filter(pointcloud => {
 			return getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
 		});
-		const standardPointclouds = regularPointclouds.filter(pointcloud => {
+		// Whole-layer opacity bypasses weighted accumulation and the Xray resolve pipeline.
+		const {solidPointclouds: standardPointclouds, opacityPointclouds} = partitionPointcloudsByOpacity(regularPointclouds.filter(pointcloud => {
 			return !getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
-		});
+		}));
 		const originalMaterials = new Map();
 		const activeTargets = [];
 		const targetSpecs = [];
@@ -384,6 +386,8 @@ export class HQSplatRenderer{
 
 		viewer.renderer.setRenderTarget(target);
 		viewer.renderer.render(viewer.scene.scene, camera);
+		// Apply whole-layer alpha after opaque normalization and scene-depth rendering.
+		renderPointcloudOpacity(viewer, opacityPointclouds, camera, target);
 		if (offscreen) {
 			return;
 		}

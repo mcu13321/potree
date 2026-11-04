@@ -13,7 +13,8 @@ export class PointCloudAlignmentGizmo {
 		this.cloud = tool.activePointCloud;
 		// Keep the 2px ring inside its 180px bounds and arrows 2px outside the center label.
 		const diameter = 180, center = diameter / 2;
-		const labelRadius = parseFloat(this.labels.labels.get(this.cloud)?.style.width ?? "40") / 2;
+		// Match the compact label even before its DOM node is available.
+		const labelRadius = parseFloat(this.labels.labels.get(this.cloud)?.style.width ?? "25") / 2;
 		// Keep each arrow shaft 18px long without changing the gap beside the label.
 		const arrowStart = center + labelRadius + 2, arrowEnd = arrowStart + 18;
 		this.element = document.createElement("div");
@@ -73,12 +74,13 @@ export class PointCloudAlignmentGizmo {
 		this.rotationHandle = document.createElement("div");
 		this.rotationHandle.className = "potree-point-cloud-alignment-ring potree-point-cloud-alignment-rotation-handle";
 		this.rotationHandle.setAttribute("aria-label", "Rotate active point cloud");
-		// Start at the rightmost point of the orbit before the first rotation gesture.
-		Object.assign(this.rotationHandle.style, {position: "absolute", width: "32px", height: "32px", boxSizing: "border-box", borderRadius: "50%", border: "2px solid #fff", background: "#1c7efd", color: "#fff", boxShadow: "0 0 8px rgba(28, 126, 253, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", transform: "translate(-50%, -50%)", pointerEvents: "auto", cursor: "grab", touchAction: "none", userSelect: "none", left: `${center + this.ringRadius}px`, top: `${center}px`});
+		// Center the compact 20px button on the orbit's rightmost point before the first gesture.
+		Object.assign(this.rotationHandle.style, {position: "absolute", width: "20px", height: "20px", boxSizing: "border-box", borderRadius: "50%", border: "2px solid #fff", background: "#1c7efd", color: "#fff", boxShadow: "0 0 8px rgba(28, 126, 253, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", transform: "translate(-50%, -50%)", pointerEvents: "auto", cursor: "grab", touchAction: "none", userSelect: "none", left: `${center + this.ringRadius}px`, top: `${center}px`});
 		const icon = document.createElementNS(ns, "svg");
 		icon.setAttribute("viewBox", "0 0 24 24");
 		icon.setAttribute("aria-hidden", "true");
-		Object.assign(icon.style, {width: "22px", height: "22px", pointerEvents: "none"});
+		// Scale the icon with its button so it remains inside the white border.
+		Object.assign(icon.style, {width: "14px", height: "14px", pointerEvents: "none"});
 		const loop = document.createElementNS(ns, "path");
 		for (const [key, value] of Object.entries({d: "M19.5 8A8 8 0 1 0 20 12M15 8H20V3", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round"})) loop.setAttribute(key, value);
 		icon.appendChild(loop);

@@ -162,6 +162,26 @@ describe("PointcloudEffectUtils", () => {
 import {setPointCloudLabelAppearance} from "../src/utils/PointCloudLabelAppearance.js";
 
 describe("label appearance effect priority", () => {
+	// An explicit session option replaces only roles that would otherwise use Xray.
+	it("routes alignment background to ordinary opacity without persisting or affecting primary EDL", () => {
+		const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
+		const options = {referenceXray: true, alignmentOpacity: 0.8};
+		for (const role of [false, "secondary"]) {
+			setPointCloudLabelAppearance(pc, role, options, true);
+			expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: false, xrayEnabled: false, normalOpacity: 0.8});
+			expect(getPointcloudEffectState(pc, false)).toMatchObject({edlEnabled: false, xrayEnabled: false, normalOpacity: 0.8});
+			expect(getPointcloudEffectState(pc, true, false).normalOpacity).toBeUndefined();
+			setPointCloudLabelAppearance(pc, role, options, false);
+			expect(getPointcloudEffectState(pc).normalOpacity).toBeUndefined();
+			expect(getPointcloudEffectState(pc).xrayEnabled).toBe(true);
+		}
+		setPointCloudLabelAppearance(pc, true, options, true);
+		expect(getPointcloudEffectState(pc)).toMatchObject({edlEnabled: true, xrayEnabled: false});
+		expect(getPointcloudEffectState(pc).normalOpacity).toBeUndefined();
+		setPointCloudLabelAppearance(pc, null);
+		expect(pc.userData).toEqual({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
+	});
+
 	it("overrides reads without persisting transient selection through normalization or setters", () => {
 		// Latest base preferences survive both active and inactive rendering overrides.
 		const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});

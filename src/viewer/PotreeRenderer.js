@@ -2,6 +2,7 @@ import {isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource} from "./PointcloudEffectUtils.js";
+import {partitionPointcloudsByOpacity, renderPointcloudOpacity} from "./PointcloudOpacityPipeline.js";
 
 
 export class PotreeRenderer {
@@ -121,17 +122,20 @@ export class PotreeRenderer {
 			}
 		}
 		
+		// Keep whole-layer opacity separate from opaque point-cloud drawing.
+		const regularPointclouds = visiblePointClouds.filter(cloud => !getPointcloudEffectState(cloud, viewer.isEDLSupported()).edlEnabled);
+		const {solidPointclouds, opacityPointclouds} = partitionPointcloudsByOpacity(regularPointclouds);
 		viewer.pRenderer.render(viewer.scene.scenePointCloud, camera, target, {
 			clipSpheres: viewer.scene.volumes.filter(v => (v instanceof Potree.SphereVolume)),
 			// 标准渲染器仅负责非 EDL 点云；EDL 点云会在专用渲染器中单独处理。
-			pointclouds: visiblePointClouds.filter((pointcloud) => {
-				return !getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).edlEnabled;
-			}),
+			pointclouds: solidPointclouds,
 		});
 		
 		// render scene
 		renderer.setRenderTarget(target);
 		renderer.render(viewer.scene.scene, camera);
+		// Composite against the completed opaque scene so normal depth occlusion is retained.
+		renderPointcloudOpacity(viewer, opacityPointclouds, camera, target);
 
 		if (offscreen) {
 			return;

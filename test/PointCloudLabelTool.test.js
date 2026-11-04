@@ -2,7 +2,7 @@ import * as THREE from "../libs/three.js/build/three.module.js";
 import {afterEach, beforeAll, describe, expect, it, vi} from "vitest";
 import {EventDispatcher} from "../src/EventDispatcher.js";
 import {PointCloudLabelTool} from "../src/utils/PointCloudLabelTool.js";
-import {setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
+import {getPointCloudLabelAppearanceOptions, withPointCloudLabelColor, setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
 
 let Viewer;
 const tools = [];
@@ -255,10 +255,11 @@ describe("passive point-cloud labels", () => {
 			expect(tool.layer.style.width).toBe("400px");
 			expect(tool.layer.style.left).toBe("35px");
 			// Compact labels retain readable white text after viewport changes.
-			expect(label.style.width).toBe("40px");
-			expect(label.style.height).toBe("40px");
+			// Fixed screen dimensions and text remain compact under either camera projection.
+			expect(label.style.width).toBe("25px");
+			expect(label.style.height).toBe("25px");
 			expect(label.style.color).toBe("rgb(255, 255, 255)");
-			expect(label.style.fontSize).toBe("14px");
+			expect(label.style.fontSize).toBe("9px");
 			// Only the button accepts input; the surrounding layer still passes through.
 			expect(label.style.pointerEvents).toBe("auto");
 			expect(tool.layer.style.pointerEvents).toBe("none");
@@ -367,15 +368,94 @@ describe("single active point-cloud label", () => {
 		}
 	});
 
-	it("keeps one 40px blue and white-bordered palette across all selection changes", () => {
+	// Host choices must follow roles, late arrivals and cleanup without changing material preferences.
+	it("supports original colors and reference Xray through the complete label lifecycle", () => {
+		const a = cloud(), b = cloud(), late = cloud(), other = cloud();
+		const {viewer, scene, makeScene} = fixture(false, [a, b]);
+		const tool = enable(viewer);
+		const isolated = enable(fixture(false, [other]).viewer);
+		isolated.setActivePointCloud(other);
+		const material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456)};
+		expect(tool.setSelectionAppearance({colorEnabled: false, referenceXray: true})).toBe(tool);
+		tool.setActivePointCloud(a);
+		// Scene membership events reconcile the native tool before refreshing labels.
+		tool.alignmentTool = {active2PointCloud: b, reconcile() {}};
+		try {
+			tool.syncAppearance();
+			for (const pc of [a, b]) withPointCloudLabelColor(pc, material, () => {
+				expect(material.activeAttributeName).toBe("rgba");
+				expect(material.color.getHex()).toBe(0x123456);
+			});
+			expect(getPointcloudEffectState(a)).toMatchObject({edlEnabled: true, xrayEnabled: false});
+			expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: false, xrayEnabled: true});
+			expect(getPointcloudEffectState(b, false).xrayEnabled).toBe(true);
+			expect(getPointcloudEffectState(b, true, false).xrayEnabled).toBe(false);
+			tool.setVisible(false);
+			scene.pointclouds.push(late);
+			scene.dispatchEvent({type: "pointcloud_added", pointcloud: late});
+			expect(getPointCloudLabelAppearanceOptions(late).colorEnabled).toBe(false);
+			tool.setSelectionAppearance();
+			expect(getPointcloudEffectState(b)).toMatchObject({edlEnabled: true, xrayEnabled: false});
+			withPointCloudLabelColor(b, material, () => expect(material.color.getHex()).toBe(0xffd400));
+			tool.setSelectionAppearance({colorEnabled: false, referenceXray: true});
+			expect(getPointCloudLabelAppearanceOptions(other).colorEnabled).toBe(true);
+		} finally { tool.alignmentTool = null; }
+		viewer.scene = makeScene([late]);
+		viewer.dispatchEvent({type: "scene_changed"});
+		for (const pc of [a, b, late]) expect(getPointCloudLabelAppearanceOptions(pc)).toBeUndefined();
+		tool.setActivePointCloud(late);
+		expect(getPointCloudLabelAppearanceOptions(late).referenceXray).toBe(true);
+		tool.dispose();
+		expect(getPointCloudLabelAppearanceOptions(late)).toBeUndefined();
+		expect(tool.setSelectionAppearance()).toBe(tool);
+	});
+
+	// Invalid opacity must preserve the old configuration; later arrivals inherit only live session overrides.
+	it("validates alignment opacity and applies it to late members only while alignment is live", () => {
+		const a = cloud(), b = cloud(), {viewer, scene} = fixture(false, [a]);
+		const tool = enable(viewer);
+		tool.setSelectionAppearance({colorEnabled: false, alignmentOpacity: 0.8});
+		for (const opacity of [null, NaN, Infinity, -0.1, 1.1]) expect(() => tool.setSelectionAppearance({alignmentOpacity: opacity})).toThrow(RangeError);
+		expect(tool.selectionAppearance.alignmentOpacity).toBe(0.8);
+		tool.setActivePointCloud(a);
+		tool.alignmentTool = {reconcile() {}};
+		try {
+			scene.pointclouds.push(b);
+			scene.dispatchEvent({type: "pointcloud_added", pointcloud: b});
+			expect(getPointcloudEffectState(b)).toMatchObject({normalOpacity: 0.8, xrayEnabled: false});
+		} finally { tool.alignmentTool = null; tool.syncAppearance(); }
+		expect(getPointcloudEffectState(b).normalOpacity).toBeUndefined();
+		expect(getPointcloudEffectState(b).xrayEnabled).toBe(true);
+		tool.dispose();
+		expect(getPointcloudEffectState(b).normalOpacity).toBeUndefined();
+	});
+
+	// Complete releases must retain the station icon flag previously supplied by the host.
+	it("updates station icon classes and accessible names without changing the label identity", () => {
+		const a = cloud(), {viewer} = fixture(false, [a]);
+		const tool = enable(viewer), label = tool.labels.get(a);
+		a.userData.stationLabelIcon = true;
+		tool.update();
+		expect(label.classList.contains("potree-point-cloud-label-icon")).toBe(true);
+		expect(label.getAttribute("aria-label")).toBe("Select point cloud station");
+		delete a.userData.stationLabelIcon;
+		tool.update();
+		expect(label.classList.contains("potree-point-cloud-label-icon")).toBe(false);
+		expect(label.getAttribute("aria-label")).toBe("Select point cloud 01");
+		expect(tool.labels.get(a)).toBe(label);
+	});
+
+	it("keeps one 25px blue and white-bordered palette across all selection changes", () => {
 		const a = cloud(), b = cloud();
 		const {viewer} = fixture(false, [a, b]);
 		const tool = enable(viewer);
 		const first = tool.labels.get(a), second = tool.labels.get(b);
 		// Selecting, switching, editing text and clearing must never alter the shared style.
 		const uniform = element => {
-			expect(element.style.width).toBe("40px");
-			expect(element.style.height).toBe("40px");
+			// Ordinary, active and reference labels share the requested diameter and smaller text.
+			expect(element.style.width).toBe("25px");
+			expect(element.style.height).toBe("25px");
+			expect(element.style.fontSize).toBe("9px");
 			expect(element.style.backgroundColor).toBe("rgb(28, 126, 253)");
 			expect(element.style.borderColor).toBe("rgb(255, 255, 255)");
 			expect(element.style.borderWidth).toBe("2px");
@@ -501,8 +581,9 @@ describe("host-owned label connections", () => {
   // Relationship edges use the same blue as the label background.
   expect(edge.getAttribute("stroke")).toBe("#1c7efd");
   expect(edge.getAttribute("stroke-width")).toBe("2");
-  expect(Number(edge.getAttribute("x1"))).toBeCloseTo(parseFloat(labels.labels.get(a).style.left) + 20, 7);
-  expect(Number(edge.getAttribute("x2"))).toBeCloseTo(parseFloat(labels.labels.get(b).style.left) - 20, 7);
+  // Relationship endpoints must meet the smaller label's 12.5px radius.
+  expect(Number(edge.getAttribute("x1"))).toBeCloseTo(parseFloat(labels.labels.get(a).style.left) + 12.5, 7);
+  expect(Number(edge.getAttribute("x2"))).toBeCloseTo(parseFloat(labels.labels.get(b).style.left) - 12.5, 7);
   const initial = edge.getAttribute("x1");
   const parent = new THREE.Object3D();
   parent.add(a);
@@ -615,7 +696,8 @@ describe("independent connection viewport clipping", () => {
   camera.lookAt(0, 0, 0);
   labels.update();
   expect(labels.labels.get(clouds[0]).style.display).toBe("flex");
-  expect(Number(labels.connections[0].element.getAttribute("x1"))).toBeCloseTo(parseFloat(labels.labels.get(clouds[0]).style.left) + 20, 7);
+  // Restoring an offscreen endpoint must still meet the compact circle's edge.
+  expect(Number(labels.connections[0].element.getAttribute("x1"))).toBeCloseTo(parseFloat(labels.labels.get(clouds[0]).style.left) + 12.5, 7);
  });
 
  it.each([false, true])("clips both-offscreen endpoints and all viewport boundaries without stale label positions (ortho=%s)", orthographic => {

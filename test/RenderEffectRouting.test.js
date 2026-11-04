@@ -7,6 +7,7 @@ import { HQSplatRenderer } from "../src/viewer/HQSplatRenderer.js";
 import { PotreeRenderer as ViewerPotreeRenderer } from "../src/viewer/PotreeRenderer.js";
 import { Utils } from "../src/utils.js";
 import { NormalizationEDLMaterial } from "../src/materials/NormalizationEDLMaterial.js";
+import {renderPointcloudOpacity} from "../src/viewer/PointcloudOpacityPipeline.js";
 
 function createRendererMock() {
 	return {
@@ -124,6 +125,55 @@ afterEach(() => {
 });
 
 describe("Render effect routing", () => {
+	// All render quality paths must use the same ordinary layer and leave Xray accumulation unused.
+	it.each(["standard", "edl", "hq"])("composites alignment backgrounds at 80 percent through the %s path", path => {
+		const active = createPointcloud("active"), reference = createPointcloud("reference"), other = createPointcloud("other");
+		const options = {colorEnabled: false, referenceXray: true, alignmentOpacity: 0.8};
+		for (const [cloud, role] of [[active, true], [reference, "secondary"], [other, false]]) setPointCloudLabelAppearance(cloud, role, options, true);
+		const viewer = createViewerForEffectRender([active, reference, other]);
+		const camera = createCamera(), target = {width: 320, height: 180};
+		const composite = vi.spyOn(Utils.screenPass, "render").mockImplementation(() => {});
+		try {
+			if (path === "standard") new ViewerPotreeRenderer(viewer).render({camera, target, offscreen: true});
+			else if (path === "edl") {
+				const renderer = new EDLRenderer(viewer);
+				// The EDL resolve is covered independently; retain its ordering around the opacity layer.
+				renderer.initEDL = () => {
+					renderer.rtEDL = {texture: {}, depthTexture: {}};
+					renderer.edlMaterial = {uniforms: new Proxy({}, {get: (object, name) => object[name] ??= {value: null}})};
+				};
+				renderer.resize = vi.fn();
+				renderer.renderShadowMap = vi.fn();
+				renderer._renderEDLPointclouds = vi.fn();
+				renderer.render({camera, target, offscreen: true});
+			}
+			else {
+				const renderer = new HQSplatRenderer(viewer);
+				// Existing HQ tests cover accumulation; isolate only routing into the ordinary opacity layer.
+				renderer._preparePassMaterials = (cloud, originals) => originals.set(cloud, cloud.material);
+				renderer._renderPointcloudGroup = vi.fn();
+				renderer._renderNormalizationPass = vi.fn();
+				const xray = vi.spyOn(renderer.xrayPipeline, "renderToTargets");
+				renderer.render({camera, target, offscreen: true});
+				expect(xray.mock.calls[0][0].pointclouds).toEqual([]);
+				expect(renderer._renderPointcloudGroup.mock.calls[0][0].pointclouds).toEqual([]);
+				expect(renderer._renderPointcloudGroup.mock.calls[1][0].pointclouds).toEqual([active]);
+				renderer.dispose();
+			}
+			const draws = viewer.pRenderer.render.mock.calls.filter(call => call[3].pointclouds.includes(reference));
+			expect(draws).toHaveLength(1);
+			expect(draws[0][1]).toBe(camera);
+			expect(draws[0][3]).toMatchObject({pointclouds: [reference, other], transparent: false, depthTest: true, depthWrite: true});
+			expect([draws[0][2].width, draws[0][2].height]).toEqual([320, 180]);
+			const layerPass = composite.mock.calls.find(call => call[1].uniforms.uOpacity?.value === 0.8);
+			expect(layerPass).toBeDefined();
+			expect(layerPass[2]).toBe(target);
+		} finally {
+			for (const cloud of [active, reference, other]) setPointCloudLabelAppearance(cloud, null);
+			renderPointcloudOpacity(viewer, [], camera);
+		}
+	});
+
 	it("底层 Renderer 应只渲染指定的点云子集", () => {
 		const threeRenderer = createRendererMock();
 		const renderer = new PotreeGLRenderer(threeRenderer);
@@ -430,6 +480,39 @@ describe("label tint at the actual octree draw boundary", () => {
 		}
 		expect(draw).toHaveBeenCalledTimes(4);
 		setPointCloudLabelAppearance(pc, null);
+	});
+
+	// Exercise both original and cached draw materials while the reference uses Xray.
+	it("preserves both selected colors and routes the opted-in reference to Xray", () => {
+		const active = createPointcloud("active"), reference = createPointcloud("reference", {edlEnabled: true});
+		const options = {colorEnabled: false, referenceXray: true};
+		setPointCloudLabelAppearance(active, true, options);
+		setPointCloudLabelAppearance(reference, "secondary", options);
+		const viewer = createViewerForEffectRender([active, reference]);
+		const effects = new EDLRenderer(viewer);
+		expect(effects._getPointcloudGroups([active, reference])).toEqual({edlPointclouds: [active], regularPointclouds: [reference]});
+		effects._configureRegularPointclouds([reference], createCamera(), false);
+		expect(reference.material.useXRAY).toBe(true);
+		expect(reference.material.useEDL).toBe(false);
+		expect(reference.userData).toMatchObject({edlEnabled: true});
+		const renderer = new PotreeGLRenderer(createRendererMock());
+		const material = {activeAttributeName: "rgba", color: new THREE.Color(0x123456)};
+		const cached = {activeAttributeName: "intensity", color: new THREE.Color(0xabcdef)};
+		for (const pc of [active, reference]) {
+			pc.material = material;
+			for (const pass of [material, cached]) {
+				const attribute = pass.activeAttributeName, color = pass.color.clone();
+				vi.spyOn(renderer, "renderOctreeWithoutLabelAppearance").mockImplementation(() => {
+					expect(pass.activeAttributeName).toBe(attribute);
+					expect(pass.color.equals(color)).toBe(true);
+					throw new Error("Draw failed");
+				});
+				expect(() => renderer.renderOctree(pc, [], createCamera(), null, {material: pass})).toThrow("Draw failed");
+				expect(pass.activeAttributeName).toBe(attribute);
+				expect(pass.color.equals(color)).toBe(true);
+			}
+			setPointCloudLabelAppearance(pc, null);
+		}
 	});
 
 	it("leaves picking and high-quality/standard depth passes unchanged", () => {

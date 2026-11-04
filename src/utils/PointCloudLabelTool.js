@@ -9,6 +9,8 @@ export class PointCloudLabelTool {
 		this.visible = true;
 		// Connection visibility is independent of labels and defaults to the existing behavior.
 		this.connectionsVisible = true;
+		// Optional host styling retains the legacy palette and reference EDL by default.
+		this.selectionAppearance = Object.freeze({colorEnabled: true, referenceXray: false});
 		this.disposed = false;
 		this.labels = new Map();
 		this.connections = [];
@@ -68,6 +70,18 @@ export class PointCloudLabelTool {
 		return this.activePointCloud;
 	}
 
+	/** Configure transient colors and reference effects independently of label interaction. */
+	setSelectionAppearance({colorEnabled = true, referenceXray = false, alignmentOpacity} = {}) {
+		if (this.disposed) return this;
+		// Reject invalid opacity before replacing any current selection appearance.
+		if (alignmentOpacity !== undefined && (!Number.isFinite(alignmentOpacity) || alignmentOpacity < 0 || alignmentOpacity > 1)) {
+			throw new RangeError("Alignment opacity must be a finite number between zero and one");
+		}
+		this.selectionAppearance = Object.freeze({colorEnabled: Boolean(colorEnabled), referenceXray: Boolean(referenceXray), alignmentOpacity});
+		this.syncAppearance();
+		return this;
+	}
+
 	/** Own appearance only while an active member exists, including newly added clouds. */
 	syncAppearance() {
 		const clouds = new Set(this.scene?.pointclouds ?? []);
@@ -80,7 +94,8 @@ export class PointCloudLabelTool {
 		if (this.activePointCloud) {
 			for (const cloud of clouds) {
 				const role = cloud === this.activePointCloud ? true : cloud === this.alignmentTool?.active2PointCloud ? "secondary" : false;
-				setPointCloudLabelAppearance(cloud, role);
+				// Only a live alignment session may replace the ordinary selection Xray route.
+				setPointCloudLabelAppearance(cloud, role, this.selectionAppearance, Boolean(this.alignmentTool));
 				this.appearanceClouds.add(cloud);
 			}
 		}
@@ -301,7 +316,10 @@ export class PointCloudLabelTool {
 			if (!this.labels.has(cloud)) this.createLabel(cloud);
 			const element = this.labels.get(cloud);
 			element.textContent = this.texts.get(cloud) ?? String(this.numbers.get(cloud)).padStart(2, "0");
-			element.setAttribute("aria-label", `Select point cloud ${element.textContent}`);
+			// Preserve the host station-icon contract when shipping a complete source build.
+			const stationIcon = cloud.userData?.stationLabelIcon === true;
+			element.classList.toggle("potree-point-cloud-label-icon", stationIcon);
+			element.setAttribute("aria-label", stationIcon ? "Select point cloud station" : `Select point cloud ${element.textContent}`);
 		}
 		this.syncAppearance();
 		if (!this.visible) { this.alignmentTool?.gizmo?.update(); return; }
@@ -393,17 +411,17 @@ export class PointCloudLabelTool {
 		this.scene?.removeEventListener("pointcloud_removed", this.onCloudChanged);
 	}
 
-	/** Use the same 40px blue circle and white border for every selection state. */
+	/** Use the same compact 25px circle and proportionally smaller text for every selection state. */
 	createLabel(cloud) {
 		const element = document.createElement("button");
 		element.type = "button";
 		this.cloudByElement.set(element, cloud);
 		element.className = "potree-point-cloud-label";
 		Object.assign(element.style, {
-			position: "absolute", width: "40px", height: "40px", boxSizing: "border-box",
+			position: "absolute", width: "25px", height: "25px", boxSizing: "border-box",
 			border: "2px solid #ffffff", borderRadius: "50%", background: "#1c7efd",
 			boxShadow: "0 0 8px rgba(71, 163, 255, 0.4)", color: "#ffffff",
-			font: "600 14px sans-serif", alignItems: "center", justifyContent: "center",
+			font: "600 9px sans-serif", alignItems: "center", justifyContent: "center",
 			transform: "translate(-50%, -50%)", pointerEvents: "auto", userSelect: "none",
 			padding: "0", cursor: "pointer", touchAction: "none",
 		});

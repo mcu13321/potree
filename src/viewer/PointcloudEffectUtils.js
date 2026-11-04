@@ -4,7 +4,7 @@
  * @returns {Object}
  */
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {getPointCloudLabelAppearance, isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
+import {getPointCloudLabelAppearance, getPointCloudLabelAppearanceOptions, getPointCloudLabelAlignmentOpacity, isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
 
 /**
  * 统一读取运行时注入的点云来源模式，避免各处重复处理优先级与兜底。
@@ -256,10 +256,17 @@ export function getPointcloudEffectState(pointcloud, edlSupported = true, applyL
 	// Serialization opts out; effect normalization already reads only the base state.
 	const active = applyLabelAppearance ? getPointCloudLabelAppearance(pointcloud) : undefined;
 	if (active !== undefined) {
-		// Selected roles use EDL; unselected members use Xray without changing saved preferences.
-		const selected = active === true || active === "secondary";
+		// Hosts may route the locked reference through Xray without changing saved preferences.
+		const referenceXray = getPointCloudLabelAppearanceOptions(pointcloud)?.referenceXray;
+		const selected = active === true || (active === "secondary" && !referenceXray);
 		state.edlEnabled = selected && Boolean(edlSupported);
 		state.xrayEnabled = !selected;
+		// Fade the ordinary color layer as a whole, retaining active EDL and saved base effects.
+		const opacity = getPointCloudLabelAlignmentOpacity(pointcloud);
+		if (state.xrayEnabled && opacity !== undefined) {
+			state.xrayEnabled = false;
+			state.normalOpacity = opacity;
+		}
 	}
 	return state;
 }

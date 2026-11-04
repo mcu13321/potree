@@ -5,6 +5,7 @@ import {EyeDomeLightingMaterial} from "../materials/EyeDomeLightingMaterial.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
 import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {partitionPointcloudsByOpacity, renderPointcloudOpacity} from "./PointcloudOpacityPipeline.js";
 
 export class EDLRenderer{
 	constructor(viewer){
@@ -221,15 +222,14 @@ export class EDLRenderer{
 	}
 
 	_renderRegularPointclouds(pointclouds, camera, isGroupSource, target = null){
-		if (pointclouds.length === 0) {
-			return;
-		}
-
 		this._configureRegularPointclouds(pointclouds, camera, isGroupSource);
+		// Defer the transparent color layer until EDL and scene objects have written their depth.
+		const {solidPointclouds} = partitionPointcloudsByOpacity(pointclouds);
+		if (solidPointclouds.length === 0) return;
 
 		this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, target, {
 			clipSpheres: this.viewer.scene.volumes.filter(v => (v instanceof SphereVolume)),
-			pointclouds: pointclouds,
+			pointclouds: solidPointclouds,
 		});
 	}
 
@@ -380,6 +380,9 @@ export class EDLRenderer{
 			}
 		}
 
+		// Resolve ordinary opacity after the primary EDL pass, with no writes to opaque scene depth.
+		const {opacityPointclouds} = partitionPointcloudsByOpacity(regularPointclouds);
+		renderPointcloudOpacity(viewer, opacityPointclouds, camera, target);
 		if (offscreen) {
 			return;
 		}

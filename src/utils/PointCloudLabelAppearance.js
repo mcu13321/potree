@@ -2,6 +2,10 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 
 // Runtime-only overrides never enter userData, saved projects, or source material settings.
 const pointCloudLabelAppearances = new WeakMap();
+// Host appearance preferences share the same transient lifetime as selection roles.
+const pointCloudLabelOptions = new WeakMap();
+// Alignment opacity is transient and must disappear when the session releases its roles.
+const pointCloudAlignmentOpacities = new WeakMap();
 const activePointCloudLabelColor = new THREE.Color(0x0088ff);
 const secondaryPointCloudLabelColor = new THREE.Color(0xffd400);
 const alignmentHiddenPointClouds = new WeakSet();
@@ -9,9 +13,27 @@ const alignmentHiddenPointClouds = new WeakSet();
 const stationHiddenPointClouds = new WeakMap();
 
 /** Register active/inactive appearance, or remove this tool's override with null. */
-export function setPointCloudLabelAppearance(pointcloud, active) {
-	if (active === null) pointCloudLabelAppearances.delete(pointcloud);
-	else pointCloudLabelAppearances.set(pointcloud, active === "secondary" ? "secondary" : Boolean(active));
+export function setPointCloudLabelAppearance(pointcloud, active, options, aligning = false) {
+	if (active === null) {
+		pointCloudLabelAppearances.delete(pointcloud);
+		pointCloudLabelOptions.delete(pointcloud);
+		pointCloudAlignmentOpacities.delete(pointcloud);
+	} else {
+		pointCloudLabelAppearances.set(pointcloud, active === "secondary" ? "secondary" : Boolean(active));
+		pointCloudLabelOptions.set(pointcloud, options);
+		if (aligning && Number.isFinite(options?.alignmentOpacity)) pointCloudAlignmentOpacities.set(pointcloud, options.alignmentOpacity);
+		else pointCloudAlignmentOpacities.delete(pointcloud);
+	}
+}
+
+/** Read a session-only whole-layer opacity without changing saved material preferences. */
+export function getPointCloudLabelAlignmentOpacity(pointcloud) {
+	return pointCloudAlignmentOpacities.get(pointcloud);
+}
+
+/** Read host overrides without mutating cloud metadata or saved material preferences. */
+export function getPointCloudLabelAppearanceOptions(pointcloud) {
+	return pointCloudLabelOptions.get(pointcloud);
 }
 
 /** Return undefined when selection does not own this point cloud's appearance. */
@@ -23,7 +45,8 @@ export function getPointCloudLabelAppearance(pointcloud) {
 export function withPointCloudLabelColor(pointcloud, material, draw) {
 	const role = getPointCloudLabelAppearance(pointcloud);
 	const tint = role === "secondary" ? secondaryPointCloudLabelColor : role === true ? activePointCloudLabelColor : null;
-	if (!tint ||
+	// Disabling role tints preserves the current attribute in regular and cached passes alike.
+	if (getPointCloudLabelAppearanceOptions(pointcloud)?.colorEnabled === false || !tint ||
 		material.activeAttributeName === "depth" || material.activeAttributeName === "indices" ||
 		material.defines?.has?.("depth_pass")) return draw();
 	const attribute = material.activeAttributeName;
