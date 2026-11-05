@@ -25,7 +25,8 @@ describe("CAD boundary styles", () => {
 		vector.applySourceOffset(new THREE.Vector3(-100, 0, 0));
 		const positions = vector.points.map(point => point.position.toArray());
 		const dispose = vi.spyOn(vector.styleLines[0].geometry, "dispose");
-		vector.setVisibleLayers(["UNDERPASS_HIDDEN"]);
+		// Source layer spelling and filter whitespace use the same normalization as text.
+		vector.setVisibleLayers([" underpass_hidden "]);
 		expect(dispose).toHaveBeenCalledOnce();
 		expect(vector.styleLines).toHaveLength(1);
 		expect(vector.getRenderablePaths()[0].layer).toBe("UNDERPASS_HIDDEN");

@@ -1,9 +1,10 @@
 // Split CAD dash patterns in source units before batching by resolved color.
 export function buildStyledSegments(paths, visibleLayerNames = null) {
-	const visible = visibleLayerNames == null ? null : new Set(visibleLayerNames.map(name => name.toUpperCase()));
+	// Normalize names consistently for styled lines and source annotations.
+	const visible = visibleLayerNames == null ? null : new Set(visibleLayerNames.map(name => name.trim().toUpperCase()));
 	const batches = new Map();
 	for (const path of paths) {
-		if (visible && !visible.has(String(path.layer ?? "").toUpperCase())) continue;
+		if (visible && !visible.has(String(path.layer ?? "").trim().toUpperCase())) continue;
 		const color = path.style?.color ?? "#ffffff";
 		if (!batches.has(color)) batches.set(color, []);
 		const segments = batches.get(color);

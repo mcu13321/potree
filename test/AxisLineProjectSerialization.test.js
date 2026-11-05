@@ -1,11 +1,29 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
-import {describe, expect, it, vi} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {AxisLineMarker} from "../src/utils/AxisLineMarker.js";
 import {CadVector} from "../src/utils/CadVector.js";
 import {loadMeasurement} from "../src/viewer/LoadProject.js";
 import {createMeasurementData} from "../src/viewer/SaveProject.js";
+import {mockCadTextCanvas} from "./helpers/cadTextCanvas.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("axis-line project serialization", () => {
+	// Saving scene coordinates must not apply a second source offset on reload.
+	it("round trips boundary text together with shifted paths and source styles", () => {
+		mockCadTextCanvas();
+		const vector = new CadVector({coordinateSpace: "source", paths: [{points: [[101, 201, 105], [102, 201, 105]]}],
+			texts: [{text: "Legend", position: [101, 201, 105], height: 0.2, color: "#ff0000", layer: "LEGEND", rotation: 0.4}]});
+		vector.applySourceOffset(new THREE.Vector3(-100, -200, -100));
+		const data = createMeasurementData(vector);
+		expect(data.coordinateSpace).toBe("scene");
+		expect(data.texts[0]).toMatchObject({position: [1, 1, 5], height: 0.2, rotation: 0.4, color: "#ff0000"});
+		const importVectors = vi.fn(record => [new CadVector(record)]);
+		const restored = loadMeasurement({cadVectorTool: {importVectors}}, data);
+		expect(restored.getTextData()).toEqual(data.texts);
+		expect(restored.getPathData()).toEqual(data.paths);
+		vector.dispose(); restored.dispose();
+	});
 	it("exports and imports generic CAD vector paths", () => {
 		const vector = new CadVector({
 			uuid: "section-1",

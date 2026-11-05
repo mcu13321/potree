@@ -147,6 +147,9 @@ export function loadMeasurement(viewer, data){
 			visible: data.visible !== false,
 			coordinateSpace: data.coordinateSpace,
 			paths: data.paths,
+			// Older projects omit annotations and retain their original line-only rendering.
+			// Older projects have no annotation payload.
+			...(data.texts ? {texts: data.texts} : {}),
 			// Layer filters are optional for saved and live CAD imports.
 			visibleLayerNames: data.visibleLayerNames,
 		})?.[0];

@@ -1,7 +1,12 @@
 import * as THREE from "../libs/three.js/build/three.module.js";
-import {describe, expect, it, vi} from "vitest";
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {Scene} from "../src/viewer/Scene.js";
 import {CadVectorTool} from "../src/utils/CadVectorTool.js";
+import {mockCadTextCanvas} from "./helpers/cadTextCanvas.js";
+
+// Include annotations in every actual Scene rebase and load-order regression.
+beforeEach(() => mockCadTextCanvas());
+afterEach(() => vi.restoreAllMocks());
 
 // Exercise the actual shared-origin lifecycle without Annotation DOM dependencies.
 vi.mock("../src/Annotation.js", () => ({Annotation: class {constructor() {this.children = [];} traverse() {}}}));
@@ -25,18 +30,33 @@ function setup() {
 function boundary(tool) {
 	return tool.importVectors({uuid: "boundary", vectorType: "boundary", coordinateSpace: "source",
 		paths: [{layer: "PLAN_CONTOURS", style: {color: "#ff0000"}, points: [[101, 201, 105], [102, 201, 105]]}],
+		texts: [{text: "Visible Boundary", layer: "LEGEND", position: [101, 201, 105], height: 0.2}],
 	})[0];
 }
 
 function expectAligned(vector, scene) {
 	const expected = new THREE.Vector3(101, 201, 105).add(scene.getPointCloudCoordinateOffset());
 	expect(vector.points[0].position.toArray()).toEqual(expected.toArray());
+	expect(vector.textMeshes[0].position.toArray()).toEqual(expected.toArray());
+	expect(vector.getTextData()[0].position).toEqual(expected.toArray());
 	// Inspect the GPU line attributes as well as the semantic marker positions.
 	const start = vector.styleLines[0].geometry.attributes.instanceStart;
 	expect([start.getX(0), start.getY(0), start.getZ(0)]).toEqual(expected.toArray());
 }
 
 describe("styled CAD source coordinates in the actual Scene", () => {
+	// Re-importing the same UUID replaces raw anchors before applying the current offset once.
+	it("replaces source text and releases its old texture without accumulating offsets", () => {
+		const {viewer, tool} = setup();
+		viewer.scene.addPointCloud(cloud(100));
+		const first = boundary(tool);
+		const dispose = vi.spyOn(first.textMeshes[0].material.map, "dispose");
+		expect(boundary(tool)).toBe(first);
+		expect(dispose).toHaveBeenCalledOnce();
+		expectAligned(first, viewer.scene);
+		expect(first.textMeshes).toHaveLength(1);
+		tool.dispose();
+	});
 	it.each([true, false])("aligns both load orders (boundary first: %s)", boundaryFirst => {
 		const {viewer, tool} = setup();
 		let vector;

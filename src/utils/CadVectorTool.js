@@ -103,6 +103,8 @@ export class CadVectorTool extends EventDispatcher {
 					existing.coordinateSpace = record.coordinateSpace ?? CAD_VECTOR_COORDINATE_SPACE.SCENE;
 					existing.appliedSourceOffset.set(0, 0, 0);
 					existing.setPaths(record.paths);
+					// Replace raw annotation anchors before the shared source offset is applied.
+					existing.setTexts(record.texts ?? []);
 					// Reuse the same vector when only a boundary layer filter changes.
 					existing.setVisibleLayers(record.visibleLayerNames ?? null);
 					existing.applySourceOffset(
@@ -120,6 +122,7 @@ export class CadVectorTool extends EventDispatcher {
 				visible: record.visible !== false,
 				coordinateSpace: record.coordinateSpace,
 				paths: record.paths,
+				texts: record.texts,
 				// Optional layer filters keep ordinary imports backward compatible.
 				visibleLayerNames: record.visibleLayerNames,
 			});

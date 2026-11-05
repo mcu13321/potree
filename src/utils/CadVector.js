@@ -4,6 +4,7 @@ import {LineSegments2} from "../../libs/three.js/lines/LineSegments2.js";
 import {LineSegmentsGeometry} from "../../libs/three.js/lines/LineSegmentsGeometry.js";
 // Styled boundaries share the ordinary CAD coordinate and lifecycle contract.
 import {buildStyledSegments} from "./CadVectorStyle.js";
+import {createCadTextMesh, disposeCadTextMesh} from "./CadText.js";
 
 export const CAD_VECTOR_TYPE = "CadVector";
 export const CAD_VECTOR_COORDINATE_SPACE = Object.freeze({
@@ -57,6 +58,7 @@ export class CadVector extends THREE.Object3D {
 		visible = true,
 		coordinateSpace = CAD_VECTOR_COORDINATE_SPACE.SCENE,
 		paths = [],
+		texts = [],
 		visibleLayerNames = null,
 	} = {}) {
 		super();
@@ -73,6 +75,9 @@ export class CadVector extends THREE.Object3D {
 		this.visible = visible;
 		this.color = new THREE.Color(0xffffff);
 		this.paths = [];
+		// Annotation anchors share the measurement-point transaction used by Scene rebasing.
+		this.texts = [];
+		this.textMeshes = [];
 		// A null filter preserves all paths for ordinary CAD vectors.
 		this.visibleLayerNames = visibleLayerNames;
 		this.styleLines = [];
@@ -104,18 +109,46 @@ export class CadVector extends THREE.Object3D {
 		this.line.visible = false;
 		this.add(this.line);
 		this.setPaths(paths);
+		this.setTexts(texts);
 	}
 
 	setPaths(paths = []) {
 		this.paths = paths.map(normalizePath).filter((path) => path.points.length >= 2);
-		this.points = this.paths.flatMap((path) => path.points);
+		this.rebuildPoints();
 		this.update();
+	}
+
+	/** Replace source annotations only when a file is imported or explicitly updated. */
+	setTexts(texts = []) {
+		for (const mesh of this.textMeshes) { this.remove(mesh); disposeCadTextMesh(mesh); }
+		this.texts = (Array.isArray(texts) ? texts : []).filter(text => text?.position)
+			.map(text => ({...text, position: toVector3(text.position)}))
+			.filter(text => text.position && String(text.text ?? "").trim() && Number.isFinite(text.height) && text.height > 0);
+		this.textMeshes = [];
+		for (const text of this.texts) {
+			const mesh = createCadTextMesh(text);
+			if (!mesh) continue;
+			mesh.cadText = text;
+			this.add(mesh);
+			this.textMeshes.push(mesh);
+		}
+		this.rebuildPoints();
+		this.update();
+	}
+
+	rebuildPoints() {
+		// Each anchor occurs exactly once, so source offsets and native rebases cannot double-shift it.
+		this.points = [...this.paths.flatMap(path => path.points), ...this.texts];
+	}
+
+	getTextData() {
+		return this.texts.map(text => ({...text, position: text.position.toArray()}));
 	}
 
 	getRenderablePaths() {
 		// Layer visibility never mutates the source geometry or its applied offset.
-		const visible = this.visibleLayerNames == null ? null : new Set(this.visibleLayerNames.map(name => name.toUpperCase()));
-		return this.paths.filter(path => !visible || visible.has(String(path.layer ?? "").toUpperCase()));
+		const visible = this.visibleLayerNames == null ? null : new Set(this.visibleLayerNames.map(name => name.trim().toUpperCase()));
+		return this.paths.filter(path => !visible || visible.has(String(path.layer ?? "").trim().toUpperCase()));
 	}
 
 	/** Update the boundary layer filter without importing geometry again. */
@@ -160,6 +193,12 @@ export class CadVector extends THREE.Object3D {
 	}
 
 	update() {
+		// Geometry and visibility updates reuse text textures and only project their source anchors.
+		const visible = this.visibleLayerNames == null ? null : new Set(this.visibleLayerNames.map(name => name.trim().toUpperCase()));
+		for (const mesh of this.textMeshes) {
+			mesh.position.copy(mesh.cadText.position);
+			mesh.visible = !visible || visible.has(String(mesh.cadText.layer ?? "").trim().toUpperCase());
+		}
 		// Reuse existing batches until geometry or layer visibility actually changes.
 		for (const line of this.styleLines) {
 			this.remove(line);
@@ -211,6 +250,7 @@ export class CadVector extends THREE.Object3D {
 	}
 
 	dispose() {
+		for (const mesh of this.textMeshes) disposeCadTextMesh(mesh);
 		// Release every style batch when the source resource leaves the scene.
 		for (const line of this.styleLines) {
 			line.geometry.dispose();

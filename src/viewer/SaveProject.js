@@ -121,6 +121,8 @@ function createCameraAnimationData(animation){
 			visible: measurement.visible !== false,
 			coordinateSpace: "scene",
 			paths: measurement.getPathData(),
+			// Saved text positions use the same scene coordinate space as the saved paths.
+			...(measurement.texts?.length ? {texts: measurement.getTextData()} : {}),
 			finished: true,
 		};
 	}
