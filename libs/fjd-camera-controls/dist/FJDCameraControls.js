@@ -935,6 +935,15 @@ var FJDCameraControls = class extends EventDispatcher {
       return Promise.resolve();
     }
     const topViewPaddingFactor = resolveTopViewPaddingFactor(options?.viewportOccupancy);
+    // The host supplies a normalized safe rectangle without changing the render viewport.
+    const viewport = options?.viewport;
+    const validViewport = viewport && [viewport.x, viewport.y, viewport.width, viewport.height].every(Number.isFinite)
+      && viewport.x >= 0 && viewport.y >= 0 && viewport.width > 0 && viewport.height > 0
+      && viewport.x + viewport.width <= 1 && viewport.y + viewport.height <= 1;
+    const fractionX = validViewport ? viewport.width : 1;
+    const fractionY = validViewport ? viewport.height : 1;
+    const ndcX = validViewport ? 2 * viewport.x + viewport.width - 1 : 0;
+    const ndcY = validViewport ? 1 - 2 * viewport.y - viewport.height : 0;
     const center = box.getCenter(this._tmpPosition2);
     const camera = this._camera;
     const { right, up, back } = this._resolveTopViewBasis(
@@ -954,12 +963,20 @@ var FJDCameraControls = class extends EventDispatcher {
       const halfVerticalFov = Math.max(verticalFov * 0.5, Number.EPSILON);
       const horizontalFov = 2 * Math.atan(Math.tan(halfVerticalFov) * Math.max(camera.aspect, Number.EPSILON));
       const halfHorizontalFov = Math.max(horizontalFov * 0.5, Number.EPSILON);
-      const distanceForHeight = halfHeight / Math.tan(halfVerticalFov);
-      const distanceForWidth = halfWidth / Math.tan(halfHorizontalFov);
+      // Account for off-center perspective parallax at both depth extremes of the bounds.
+      const tanY = Math.tan(halfVerticalFov);
+      const tanX = Math.tan(halfHorizontalFov);
+      const distanceForHeight = (halfHeight + Math.abs(ndcY) * projectedSize.z * 0.5 * tanY) / (tanY * fractionY);
+      const distanceForWidth = (halfWidth + Math.abs(ndcX) * projectedSize.z * 0.5 * tanX) / (tanX * fractionX);
       const topDistance = Math.max(distanceForHeight, distanceForWidth) * topViewPaddingFactor;
       const targetDistance = projectedSize.z * 0.5 + topDistance;
+      // Offset only the camera so navigation continues to orbit the actual bounds center.
+      const position = this._tmpPosition.copy(center)
+        .addScaledVector(right, -ndcX * targetDistance * tanX)
+        .addScaledVector(up, -ndcY * targetDistance * tanY)
+        .add(this._tmpOffset.copy(back).multiplyScalar(targetDistance));
       return this._setPose(
-        this._tmpPosition.copy(center).add(this._tmpOffset.copy(back).multiplyScalar(targetDistance)),
+        position,
         topQuaternion,
         center,
         enableTransition,
@@ -969,12 +986,17 @@ var FJDCameraControls = class extends EventDispatcher {
     if (camera.isOrthographicCamera) {
       const viewWidth = Math.max(camera.right - camera.left, Number.EPSILON);
       const viewHeight = Math.max(camera.top - camera.bottom, Number.EPSILON);
-      const widthZoom = viewWidth / Math.max(projectedSize.x * topViewPaddingFactor, Number.EPSILON);
-      const heightZoom = viewHeight / Math.max(projectedSize.y * topViewPaddingFactor, Number.EPSILON);
+      const widthZoom = viewWidth * fractionX / Math.max(projectedSize.x * topViewPaddingFactor, Number.EPSILON);
+      const heightZoom = viewHeight * fractionY / Math.max(projectedSize.y * topViewPaddingFactor, Number.EPSILON);
       const targetZoom = this._sanitizeZoom(Math.min(widthZoom, heightZoom));
+      // Keep the orbit point on the model while panning its projection into the safe region.
       const targetDistance = projectedSize.z * 0.5 + Math.max(projectedSize.z, 1);
+      const position = this._tmpPosition.copy(center)
+        .addScaledVector(right, -ndcX * viewWidth / (2 * targetZoom))
+        .addScaledVector(up, -ndcY * viewHeight / (2 * targetZoom))
+        .add(this._tmpOffset.copy(back).multiplyScalar(targetDistance));
       return this._setPose(
-        this._tmpPosition.copy(center).add(this._tmpOffset.copy(back).multiplyScalar(targetDistance)),
+        position,
         topQuaternion,
         center,
         enableTransition,

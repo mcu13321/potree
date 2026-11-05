@@ -36,7 +36,26 @@ describe("axis-line project serialization", () => {
 			visible: false,
 			coordinateSpace: "scene",
 			paths: data.paths,
+			// Ordinary CAD serializes an unrestricted layer projection.
+			visibleLayerNames: null,
 		});
+	});
+
+	// Source CAD styles and the selected layer filter survive a project round trip.
+	it("exports and imports styled boundary filters without discarding hidden paths", () => {
+		const paths = [
+			{layer: "L1", style: {color: "#ff0000", pattern: []}, points: [[1, 2, 3], [2, 3, 4]]},
+			{layer: "L2", style: {color: "#0000ff", pattern: [0.6, -0.4]}, points: [[1, 4, 3], [2, 5, 4]]},
+		];
+		const vector = new CadVector({uuid: "boundary", vectorType: "boundary", paths, visibleLayerNames: ["L2"]});
+		const data = createMeasurementData(vector);
+		expect(data.visibleLayerNames).toEqual(["L2"]);
+		expect(data.paths).toHaveLength(2);
+		expect(data.paths[1].style).toEqual(paths[1].style);
+		const importVectors = vi.fn(records => records.map?.(record => record) ?? [records]);
+		loadMeasurement({cadVectorTool: {importVectors}}, data);
+		expect(importVectors.mock.calls[0][0].visibleLayerNames).toEqual(["L2"]);
+		vector.dispose();
 	});
 	it("exports completed axis-line coordinates as final B points", () => {
 		const marker = new AxisLineMarker({uuid: "axis-1", visible: false});

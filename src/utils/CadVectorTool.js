@@ -70,7 +70,11 @@ export class CadVectorTool extends EventDispatcher {
 
 	onPointCloudOffsetChanged(event) {
 		for (const vector of this.getCadVectors()) {
-			vector.markSourceOffset(event.nextOffset);
+			// Scene has already translated markers by delta; retain any earlier unsynchronized offset.
+			vector.markSourceOffset(event.delta?.isVector3
+				? vector.appliedSourceOffset.clone().add(event.delta)
+				: event.nextOffset);
+			vector.applySourceOffset(event.nextOffset);
 		}
 	}
 
@@ -99,6 +103,8 @@ export class CadVectorTool extends EventDispatcher {
 					existing.coordinateSpace = record.coordinateSpace ?? CAD_VECTOR_COORDINATE_SPACE.SCENE;
 					existing.appliedSourceOffset.set(0, 0, 0);
 					existing.setPaths(record.paths);
+					// Reuse the same vector when only a boundary layer filter changes.
+					existing.setVisibleLayers(record.visibleLayerNames ?? null);
 					existing.applySourceOffset(
 						this.viewer.scene.getPointCloudCoordinateOffset?.() ?? new THREE.Vector3(),
 					);
@@ -114,6 +120,8 @@ export class CadVectorTool extends EventDispatcher {
 				visible: record.visible !== false,
 				coordinateSpace: record.coordinateSpace,
 				paths: record.paths,
+				// Optional layer filters keep ordinary imports backward compatible.
+				visibleLayerNames: record.visibleLayerNames,
 			});
 			if (vector.paths.length === 0) {
 				vector.dispose();
@@ -163,6 +171,8 @@ export class CadVectorTool extends EventDispatcher {
 	}
 
 	update() {
+		// Reacquiring an anchor after zero visible clouds does not emit an offset event.
+		this.alignSourceVectors();
 		const size = this.renderer.getSize(new THREE.Vector2());
 		const width = size.width ?? size.x;
 		const height = size.height ?? size.y;

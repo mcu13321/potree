@@ -1436,6 +1436,8 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setTopView4CameraControls(animation = true, options = {}){
+		// Resolve current host occlusion on each fit, including sidebar changes since initialization.
+		options = {...this.getTopViewFitOptions?.(), ...options};
 		const activeControls =
 			this.controls?.usesRigidTopViewFit === true
 				? this.controls

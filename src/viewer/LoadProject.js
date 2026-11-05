@@ -147,6 +147,8 @@ export function loadMeasurement(viewer, data){
 			visible: data.visible !== false,
 			coordinateSpace: data.coordinateSpace,
 			paths: data.paths,
+			// Layer filters are optional for saved and live CAD imports.
+			visibleLayerNames: data.visibleLayerNames,
 		})?.[0];
 	}
 

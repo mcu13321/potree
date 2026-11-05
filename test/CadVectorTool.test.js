@@ -110,6 +110,21 @@ describe("CadVectorTool", () => {
 		expect(viewer.inputHandler.registerInteractiveScene).not.toHaveBeenCalled();
 	});
 
+	// Live updates and project loads must preserve the optional native layer projection.
+	it("imports boundary filters and changes them on the same source-coordinate vector", () => {
+		const viewer = new MockViewer();
+		tool = new CadVectorTool(viewer);
+		const record = {uuid: "boundary", vectorType: "boundary", coordinateSpace: "source", visibleLayerNames: ["L1"], paths: [
+			{layer: "L1", points: [[100, 1, 2], [101, 1, 2]], style: {color: "#ff0000"}},
+			{layer: "L2", points: [[100, 3, 4], [101, 3, 4]], style: {color: "#0000ff"}},
+		]};
+		const [vector] = tool.importVectors(record);
+		expect(vector.getRenderablePaths().map(path => path.layer)).toEqual(["L1"]);
+		const [updated] = tool.importVectors({...record, visibleLayerNames: ["L2"]});
+		expect(updated).toBe(vector);
+		expect(updated.getRenderablePaths().map(path => path.layer)).toEqual(["L2"]);
+	});
+
 	it("updates a completed manual marker without replacing its semantic name", () => {
 		const viewer = new MockViewer();
 		const marker = new AxisLineMarker({uuid: "manual-axis"});

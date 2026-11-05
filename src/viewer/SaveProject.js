@@ -116,6 +116,8 @@ function createCameraAnimationData(animation){
 			uuid: measurement.uuid,
 			name: measurement.name,
 			vectorType: measurement.vectorType,
+			// Preserve the current boundary layer projection alongside source paths.
+			visibleLayerNames: measurement.visibleLayerNames,
 			visible: measurement.visible !== false,
 			coordinateSpace: "scene",
 			paths: measurement.getPathData(),

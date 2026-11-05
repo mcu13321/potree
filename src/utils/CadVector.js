@@ -2,6 +2,8 @@ import * as THREE from "../../libs/three.js/build/three.module.js";
 import {LineMaterial} from "../../libs/three.js/lines/LineMaterial.js";
 import {LineSegments2} from "../../libs/three.js/lines/LineSegments2.js";
 import {LineSegmentsGeometry} from "../../libs/three.js/lines/LineSegmentsGeometry.js";
+// Styled boundaries share the ordinary CAD coordinate and lifecycle contract.
+import {buildStyledSegments} from "./CadVectorStyle.js";
 
 export const CAD_VECTOR_TYPE = "CadVector";
 export const CAD_VECTOR_COORDINATE_SPACE = Object.freeze({
@@ -55,6 +57,7 @@ export class CadVector extends THREE.Object3D {
 		visible = true,
 		coordinateSpace = CAD_VECTOR_COORDINATE_SPACE.SCENE,
 		paths = [],
+		visibleLayerNames = null,
 	} = {}) {
 		super();
 
@@ -70,6 +73,9 @@ export class CadVector extends THREE.Object3D {
 		this.visible = visible;
 		this.color = new THREE.Color(0xffffff);
 		this.paths = [];
+		// A null filter preserves all paths for ordinary CAD vectors.
+		this.visibleLayerNames = visibleLayerNames;
+		this.styleLines = [];
 		this.points = [];
 		this.appliedSourceOffset = new THREE.Vector3();
 
@@ -107,7 +113,16 @@ export class CadVector extends THREE.Object3D {
 	}
 
 	getRenderablePaths() {
-		return this.paths;
+		// Layer visibility never mutates the source geometry or its applied offset.
+		const visible = this.visibleLayerNames == null ? null : new Set(this.visibleLayerNames.map(name => name.toUpperCase()));
+		return this.paths.filter(path => !visible || visible.has(String(path.layer ?? "").toUpperCase()));
+	}
+
+	/** Update the boundary layer filter without importing geometry again. */
+	setVisibleLayers(names = null) {
+		if (JSON.stringify(names) === JSON.stringify(this.visibleLayerNames)) return;
+		this.visibleLayerNames = names;
+		this.update();
 	}
 
 	getPathData() {
@@ -140,9 +155,34 @@ export class CadVector extends THREE.Object3D {
 
 	updateResolution(width, height) {
 		this.line.material.resolution.set(Math.max(width, 1), Math.max(height, 1));
+		// Styled batches use the same pixel width as the legacy white batch.
+		for (const line of this.styleLines) line.material.resolution.copy(this.line.material.resolution);
 	}
 
 	update() {
+		// Reuse existing batches until geometry or layer visibility actually changes.
+		for (const line of this.styleLines) {
+			this.remove(line);
+			line.geometry.dispose();
+			line.material.dispose();
+		}
+		this.styleLines = [];
+		if (this.paths.some(path => path.style)) {
+			this.line.visible = false;
+			for (const [color, positions] of buildStyledSegments(this.paths, this.visibleLayerNames)) {
+				if (!positions.length) continue;
+				const geometry = new LineSegmentsGeometry();
+				geometry.setPositions(positions);
+				const material = this.line.material.clone();
+				material.color.set(color);
+				const line = new LineSegments2(geometry, material);
+				line.frustumCulled = false;
+				line.computeLineDistances();
+				this.add(line);
+				this.styleLines.push(line);
+			}
+			return;
+		}
 		const segmentPositions = [];
 		for (const path of this.getRenderablePaths()) {
 			const positions = path.points.map((point) => point.position ?? point);
@@ -171,6 +211,11 @@ export class CadVector extends THREE.Object3D {
 	}
 
 	dispose() {
+		// Release every style batch when the source resource leaves the scene.
+		for (const line of this.styleLines) {
+			line.geometry.dispose();
+			line.material.dispose();
+		}
 		this.line.geometry.dispose();
 		this.line.material.dispose();
 	}

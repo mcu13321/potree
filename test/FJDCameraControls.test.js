@@ -5,6 +5,27 @@ import {FJDCameraControls} from "../libs/fjd-camera-controls/dist/FJDCameraContr
 // 测试直接引用 controls core 时，需要先安装当前测试环境使用的 THREE。
 FJDCameraControls.install({THREE});
 
+// Verify the rendered projection, including depth parallax, against the unobscured canvas.
+it.each([false, true])("top-view bounds avoid a sidebar and recover full framing (orthographic: %s)", orthographic => {
+	const {camera, domElement} = orthographic ? createOrthographicCameraAndDom() : createCameraAndDom();
+	const controls = new FJDCameraControls(camera, domElement);
+	const box = new THREE.Box3(new THREE.Vector3(-30, -12, -10), new THREE.Vector3(30, 12, 50));
+	const center = box.getCenter(new THREE.Vector3());
+	controls.fitToTopViewBox(box, false, {viewport: {x: 0.375, y: 0, width: 0.625, height: 1}});
+	// Sidebar compensation must not move the navigation pivot away from the model.
+	expect(controls.getTarget(new THREE.Vector3()).toArray()).toEqual(center.toArray());
+	expect(center.clone().project(camera).x).toBeCloseTo(0.375, 6);
+	for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+		const projected = new THREE.Vector3(x, y, z).project(camera);
+		expect(projected.x).toBeGreaterThanOrEqual(-0.25 - 1e-6);
+		expect(projected.x).toBeLessThanOrEqual(1 + 1e-6);
+		expect(Math.abs(projected.y)).toBeLessThanOrEqual(1 + 1e-6);
+	}
+	controls.fitToTopViewBox(box, false);
+	expect(center.clone().project(camera).x).toBeCloseTo(0, 6);
+	controls.dispose();
+});
+
 // 创建带 pointerId 和 pointerType 的指针事件，供桌面端与触摸端测试复用。
 function createPointerEvent(type, {
 	clientX,
