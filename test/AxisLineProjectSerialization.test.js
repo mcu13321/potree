@@ -9,6 +9,14 @@ import {mockCadTextCanvas} from "./helpers/cadTextCanvas.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("axis-line project serialization", () => {
+	it("preserves orthogonal metadata without changing CAD or axis-line branches", () => {
+		// The shared serializer must preserve the dedicated tool identity and computed pair.
+		const data = createMeasurementData({uuid: "o1", name: "orthogonal", orthogonalAxis: "x", visible: false,
+			points: [{position: new THREE.Vector3(1, 2, 3)}, {position: new THREE.Vector3(4, 2, 3)}],
+			color: new THREE.Color(1, 0, 0), finished: true});
+		expect(data.orthogonalAxis).toBe("x"); expect(data.visible).toBe(false);
+		expect(data.points).toEqual([[1, 2, 3], [4, 2, 3]]);
+	});
 	// Saving scene coordinates must not apply a second source offset on reload.
 	it("round trips boundary text together with shifted paths and source styles", () => {
 		mockCadTextCanvas();

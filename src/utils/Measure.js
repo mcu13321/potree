@@ -452,6 +452,11 @@ export class Measure extends THREE.Object3D {
 
 		{ // Event Listeners
 			let drag = (e) => {
+				// Axis-constrained endpoints must never enter ordinary free dragging.
+				if (this.name === "orthogonal") {
+					this.viewer.orthogonalMeasurementTool?.handleMarkerDrag(e, this);
+					return;
+				}
 				let I = Utils.getMousePointCloudIntersection(
 					e.drag.end, 
 					e.viewer.scene.getActiveCamera(), 
@@ -540,6 +545,11 @@ export class Measure extends THREE.Object3D {
 			};
 
 			let drop = e => {
+				// Commit both orthogonal endpoints as one edit transaction.
+				if (this.name === "orthogonal") {
+					this.viewer.orthogonalMeasurementTool?.handleMarkerDrop(e, this);
+					return;
+				}
 				drag(e);
 				let i = this.spheres.indexOf(e.drag.object);
 				if (i !== -1) {
@@ -1213,6 +1223,8 @@ export class Measure extends THREE.Object3D {
 	raycast (raycaster, intersects) {
 		for (let i = 0; i < this.points.length; i++) {
 			let sphere = this.spheres[i];
+			// Draft and hidden markers cannot capture saved-result editing.
+			if (this.name === "orthogonal" && (!sphere.visible || this.viewer.orthogonalMeasurementTool?.active || this.viewer.orthogonalMeasurementTool?.editingEnabled === false)) continue;
 
 			sphere.raycast(raycaster, intersects);
 		}

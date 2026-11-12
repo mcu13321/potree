@@ -177,6 +177,12 @@ export function loadMeasurement(viewer, data){
 
 	measure.uuid = data.uuid;
 	measure.name = data.name;
+	// Restored orthogonal results keep their two-point axis constraint.
+	if (data.name === "orthogonal") {
+		measure.orthogonalAxis = data.orthogonalAxis;
+		measure.maxMarkers = 2;
+		measure.visible = data.visible !== false;
+	}
 	measure.showDistances = data.showDistances;
 	measure.showCoordinates = data.showCoordinates;
 	measure.showArea = data.showArea;
