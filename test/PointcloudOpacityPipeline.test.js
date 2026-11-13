@@ -100,7 +100,10 @@ describe("ordinary whole-layer point-cloud opacity", () => {
 
 	it("uses offscreen dimensions and keeps independent opacity groups separate", () => {
 		const {viewer, clouds, pipeline, camera, composites} = fixture();
-		setPointCloudLabelAppearance(clouds[1], false, {alignmentOpacity: 0.5}, true);
+		// Shared host options must split the paired reference and ordinary background into separate passes.
+		const options = {referenceXray: true, alignmentOpacity: 0.5, alignmentReferenceOpacity: 0.8};
+		setPointCloudLabelAppearance(clouds[0], "secondary", options, true);
+		setPointCloudLabelAppearance(clouds[1], false, options, true);
 		const output = {width: 320, height: 180};
 		pipeline.render(clouds, camera, output);
 		expect([pipeline.target.width, pipeline.target.height]).toEqual([320, 180]);

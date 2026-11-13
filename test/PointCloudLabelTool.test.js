@@ -430,6 +430,28 @@ describe("single active point-cloud label", () => {
 		expect(getPointcloudEffectState(b).normalOpacity).toBeUndefined();
 	});
 
+	// Reference overrides preserve zero/one boundaries, legacy fallback and atomic validation.
+	it.each([undefined, 0, 0.8, 1])("validates and scopes the reference opacity override %s", alignmentReferenceOpacity => {
+		const a = cloud(), b = cloud(), c = cloud(), {viewer} = fixture(false, [a, b, c]);
+		const tool = enable(viewer);
+		tool.setSelectionAppearance({referenceXray: true, alignmentOpacity: 0.5, alignmentReferenceOpacity});
+		const previous = tool.selectionAppearance;
+		for (const opacity of [null, NaN, Infinity, -0.1, 1.1, "0.8"]) {
+			expect(() => tool.setSelectionAppearance({alignmentOpacity: 0.2, alignmentReferenceOpacity: opacity})).toThrow(RangeError);
+			expect(tool.selectionAppearance).toBe(previous);
+		}
+		tool.setActivePointCloud(a);
+		tool.alignmentTool = {active2PointCloud: b, reconcile() {}};
+		try {
+			tool.syncAppearance();
+			expect(getPointcloudEffectState(b).normalOpacity).toBe(alignmentReferenceOpacity ?? 0.5);
+			expect(getPointcloudEffectState(c).normalOpacity).toBe(0.5);
+			expect(getPointcloudEffectState(a).normalOpacity).toBeUndefined();
+		} finally { tool.alignmentTool = null; tool.syncAppearance(); }
+		expect(getPointcloudEffectState(b).normalOpacity).toBeUndefined();
+		tool.dispose();
+	});
+
 	// Complete releases must retain the station icon flag previously supplied by the host.
 	it("updates station icon classes and accessible names without changing the label identity", () => {
 		const a = cloud(), {viewer} = fixture(false, [a]);

@@ -21,7 +21,11 @@ export function setPointCloudLabelAppearance(pointcloud, active, options, aligni
 	} else {
 		pointCloudLabelAppearances.set(pointcloud, active === "secondary" ? "secondary" : Boolean(active));
 		pointCloudLabelOptions.set(pointcloud, options);
-		if (aligning && Number.isFinite(options?.alignmentOpacity)) pointCloudAlignmentOpacities.set(pointcloud, options.alignmentOpacity);
+		// The paired reference may be more opaque while omitted overrides retain the shared opacity.
+		const opacity = active === "secondary"
+			? options?.alignmentReferenceOpacity ?? options?.alignmentOpacity
+			: options?.alignmentOpacity;
+		if (aligning && Number.isFinite(opacity)) pointCloudAlignmentOpacities.set(pointcloud, opacity);
 		else pointCloudAlignmentOpacities.delete(pointcloud);
 	}
 }

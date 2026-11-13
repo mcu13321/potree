@@ -71,13 +71,15 @@ export class PointCloudLabelTool {
 	}
 
 	/** Configure transient colors and reference effects independently of label interaction. */
-	setSelectionAppearance({colorEnabled = true, referenceXray = false, alignmentOpacity} = {}) {
+	setSelectionAppearance({colorEnabled = true, referenceXray = false, alignmentOpacity, alignmentReferenceOpacity} = {}) {
 		if (this.disposed) return this;
-		// Reject invalid opacity before replacing any current selection appearance.
-		if (alignmentOpacity !== undefined && (!Number.isFinite(alignmentOpacity) || alignmentOpacity < 0 || alignmentOpacity > 1)) {
-			throw new RangeError("Alignment opacity must be a finite number between zero and one");
+		// Validate both layer opacities before replacing the current selection appearance.
+		for (const opacity of [alignmentOpacity, alignmentReferenceOpacity]) {
+			if (opacity !== undefined && (!Number.isFinite(opacity) || opacity < 0 || opacity > 1)) {
+				throw new RangeError("Alignment opacity must be a finite number between zero and one");
+			}
 		}
-		this.selectionAppearance = Object.freeze({colorEnabled: Boolean(colorEnabled), referenceXray: Boolean(referenceXray), alignmentOpacity});
+		this.selectionAppearance = Object.freeze({colorEnabled: Boolean(colorEnabled), referenceXray: Boolean(referenceXray), alignmentOpacity, alignmentReferenceOpacity});
 		this.syncAppearance();
 		return this;
 	}

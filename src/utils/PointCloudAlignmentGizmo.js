@@ -74,13 +74,13 @@ export class PointCloudAlignmentGizmo {
 		this.rotationHandle = document.createElement("div");
 		this.rotationHandle.className = "potree-point-cloud-alignment-ring potree-point-cloud-alignment-rotation-handle";
 		this.rotationHandle.setAttribute("aria-label", "Rotate active point cloud");
-		// Center the compact 20px button on the orbit's rightmost point before the first gesture.
-		Object.assign(this.rotationHandle.style, {position: "absolute", width: "20px", height: "20px", boxSizing: "border-box", borderRadius: "50%", border: "2px solid #fff", background: "#1c7efd", color: "#fff", boxShadow: "0 0 8px rgba(28, 126, 253, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", transform: "translate(-50%, -50%)", pointerEvents: "auto", cursor: "grab", touchAction: "none", userSelect: "none", left: `${center + this.ringRadius}px`, top: `${center}px`});
+		// Center the compact 28px button on the orbit's rightmost point before the first gesture.
+		Object.assign(this.rotationHandle.style, {position: "absolute", width: "28px", height: "28px", boxSizing: "border-box", borderRadius: "50%", border: "2px solid #fff", background: "#1c7efd", color: "#fff", boxShadow: "0 0 8px rgba(28, 126, 253, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", transform: "translate(-50%, -50%)", pointerEvents: "auto", cursor: "grab", touchAction: "none", userSelect: "none", left: `${center + this.ringRadius}px`, top: `${center}px`});
 		const icon = document.createElementNS(ns, "svg");
 		icon.setAttribute("viewBox", "0 0 24 24");
 		icon.setAttribute("aria-hidden", "true");
 		// Scale the icon with its button so it remains inside the white border.
-		Object.assign(icon.style, {width: "14px", height: "14px", pointerEvents: "none"});
+		Object.assign(icon.style, {width: "22px", height: "22px", pointerEvents: "none"});
 		const loop = document.createElementNS(ns, "path");
 		for (const [key, value] of Object.entries({d: "M19.5 8A8 8 0 1 0 20 12M15 8H20V3", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round"})) loop.setAttribute(key, value);
 		icon.appendChild(loop);

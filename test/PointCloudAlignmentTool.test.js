@@ -66,21 +66,30 @@ describe("opt-in point-cloud alignment", () => {
 	});
 
 	// Waiting, pairing and every native exit must retain the scope of the host-only opacity option.
-	it.each(["commit", "cancel", "waiting", "scene"])("uses ordinary 80 percent layers only inside alignment until %s", outcome => {
-		const {viewer, labels, clouds: [a, b, c], makeScene} = fixture();
-		labels.setSelectionAppearance({colorEnabled: false, referenceXray: true, alignmentOpacity: 0.8});
+	it.each(["commit", "cancel", "waiting", "scene", "reference", "dispose"])("keeps the paired reference more opaque than backgrounds until %s", outcome => {
+		const {viewer, labels, clouds: [a, b, c], scene, makeScene} = fixture();
+		labels.setSelectionAppearance({colorEnabled: false, referenceXray: true, alignmentOpacity: 0.5, alignmentReferenceOpacity: 0.8});
 		labels.setActivePointCloud(a);
 		expect(getPointcloudEffectState(b)).toMatchObject({xrayEnabled: true});
 		expect(getPointcloudEffectState(b).normalOpacity).toBeUndefined();
 		const tool = viewer.enablePointCloudAlignment();
-		for (const cloud of [b, c]) expect(getPointcloudEffectState(cloud)).toMatchObject({edlEnabled: false, xrayEnabled: false, normalOpacity: 0.8});
+		for (const cloud of [b, c]) expect(getPointcloudEffectState(cloud)).toMatchObject({edlEnabled: false, xrayEnabled: false, normalOpacity: 0.5});
 		expect(getPointcloudEffectState(a).normalOpacity).toBeUndefined();
 		if (outcome !== "waiting") tool.setActive2PointCloud(b);
+		// Only a selected reference receives the higher opacity; waiting candidates retain the background value.
+		expect(getPointcloudEffectState(b).normalOpacity).toBe(outcome === "waiting" ? 0.5 : 0.8);
+		expect(getPointcloudEffectState(c).normalOpacity).toBe(0.5);
 		expect(getPointcloudEffectState(a)).toMatchObject({edlEnabled: true, xrayEnabled: false});
 		expect(getPointcloudEffectState(b, true, false).normalOpacity).toBeUndefined();
 		if (outcome === "scene") {
 			viewer.scene = makeScene([]);
 			viewer.dispatchEvent({type: "scene_changed"});
+		} else if (outcome === "reference") {
+			// Removing the locked reference must release both role-specific opacity overrides.
+			scene.pointclouds.splice(scene.pointclouds.indexOf(b), 1);
+			scene.dispatchEvent({type: "pointcloud_removed", pointcloud: b});
+		} else if (outcome === "dispose") {
+			tool.dispose();
 		} else if (outcome === "commit") tool.commit();
 		else tool.cancel();
 		for (const cloud of [a, b, c]) expect(getPointcloudEffectState(cloud).normalOpacity).toBeUndefined();
@@ -521,11 +530,11 @@ describe("alignment transform gizmo", () => {
 		// Only the visible ring receives emphasis; the hit area retains its original size.
 		const visibleRing = tool.gizmo.rotationRings[0];
 		const arrows = tool.gizmo.directionArrows;
-		// The smaller button and its icon keep the same orbit and mouse/touch input behavior.
-		expect(handle.style.width).toBe("20px");
-		expect(handle.style.height).toBe("20px");
-		expect(handle.querySelector("svg").style.width).toBe("14px");
-		expect(handle.querySelector("svg").style.height).toBe("14px");
+		// The enlarged button and its icon keep the same orbit and mouse/touch input behavior.
+		expect(handle.style.width).toBe("28px");
+		expect(handle.style.height).toBe("28px");
+		expect(handle.querySelector("svg").style.width).toBe("22px");
+		expect(handle.querySelector("svg").style.height).toBe("22px");
 		expect(handle.style.borderWidth).toBe("2px");
 		expect(handle.style.borderColor).toBe("rgb(255, 255, 255)");
 		expect(handle.style.backgroundColor).toBe(labels.labels.get(a).style.backgroundColor);

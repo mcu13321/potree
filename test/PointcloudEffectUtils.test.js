@@ -182,6 +182,21 @@ describe("label appearance effect priority", () => {
 		expect(pc.userData).toEqual({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
 	});
 
+	// Hardware capability changes must not merge the reference and background opacity roles.
+	it.each([false, true])("resolves separate alignment layer opacities without changing base preferences (EDL=%s)", supported => {
+		const options = {referenceXray: true, alignmentOpacity: 0.5, alignmentReferenceOpacity: 0.8};
+		for (const [role, opacity] of [[false, 0.5], ["secondary", 0.8], [true, undefined]]) {
+			const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
+			setPointCloudLabelAppearance(pc, role, options, true);
+			expect(getPointcloudEffectState(pc, supported)).toMatchObject({edlEnabled: role === true && supported, xrayEnabled: false});
+			expect(getPointcloudEffectState(pc, supported).normalOpacity).toBe(opacity);
+			expect(getPointcloudEffectState(pc, supported, false).normalOpacity).toBeUndefined();
+			setPointCloudLabelAppearance(pc, null);
+			expect(getPointcloudEffectState(pc, supported).normalOpacity).toBeUndefined();
+			expect(pc.userData).toEqual({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});
+		}
+	});
+
 	it("overrides reads without persisting transient selection through normalization or setters", () => {
 		// Latest base preferences survive both active and inactive rendering overrides.
 		const pc = createPointcloud({edlEnabled: true, xrayEnabled: false, xrayOpacity: 0.25});

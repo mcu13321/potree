@@ -126,13 +126,17 @@ afterEach(() => {
 
 describe("Render effect routing", () => {
 	// All render quality paths must use the same ordinary layer and leave Xray accumulation unused.
-	it.each(["standard", "edl", "hq"])("composites alignment backgrounds at 80 percent through the %s path", path => {
+	it.each(["standard", "edl", "hq"])("composites reference and background opacity separately through the %s path", path => {
 		const active = createPointcloud("active"), reference = createPointcloud("reference"), other = createPointcloud("other");
-		const options = {colorEnabled: false, referenceXray: true, alignmentOpacity: 0.8};
+		const options = {colorEnabled: false, referenceXray: true, alignmentOpacity: 0.5, alignmentReferenceOpacity: 0.8};
 		for (const [cloud, role] of [[active, true], [reference, "secondary"], [other, false]]) setPointCloudLabelAppearance(cloud, role, options, true);
 		const viewer = createViewerForEffectRender([active, reference, other]);
 		const camera = createCamera(), target = {width: 320, height: 180};
-		const composite = vi.spyOn(Utils.screenPass, "render").mockImplementation(() => {});
+		// Snapshot uniforms at draw time because the compositor reuses its material between groups.
+		const layerPasses = [];
+		vi.spyOn(Utils.screenPass, "render").mockImplementation((_renderer, material, output) => {
+			if (Number.isFinite(material.uniforms.uOpacity?.value)) layerPasses.push({opacity: material.uniforms.uOpacity.value, target: output});
+		});
 		try {
 			if (path === "standard") new ViewerPotreeRenderer(viewer).render({camera, target, offscreen: true});
 			else if (path === "edl") {
@@ -163,11 +167,12 @@ describe("Render effect routing", () => {
 			const draws = viewer.pRenderer.render.mock.calls.filter(call => call[3].pointclouds.includes(reference));
 			expect(draws).toHaveLength(1);
 			expect(draws[0][1]).toBe(camera);
-			expect(draws[0][3]).toMatchObject({pointclouds: [reference, other], transparent: false, depthTest: true, depthWrite: true});
+			expect(draws[0][3]).toMatchObject({pointclouds: [reference], transparent: false, depthTest: true, depthWrite: true});
 			expect([draws[0][2].width, draws[0][2].height]).toEqual([320, 180]);
-			const layerPass = composite.mock.calls.find(call => call[1].uniforms.uOpacity?.value === 0.8);
-			expect(layerPass).toBeDefined();
-			expect(layerPass[2]).toBe(target);
+			const backgroundDraws = viewer.pRenderer.render.mock.calls.filter(call => call[3].pointclouds.includes(other));
+			expect(backgroundDraws).toHaveLength(1);
+			expect(backgroundDraws[0][3]).toMatchObject({pointclouds: [other], transparent: false, depthTest: true, depthWrite: true});
+			expect(layerPasses).toEqual([{opacity: 0.8, target}, {opacity: 0.5, target}]);
 		} finally {
 			for (const cloud of [active, reference, other]) setPointCloudLabelAppearance(cloud, null);
 			renderPointcloudOpacity(viewer, [], camera);
