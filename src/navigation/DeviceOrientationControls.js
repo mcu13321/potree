@@ -28,24 +28,40 @@ export class DeviceOrientationControls extends EventDispatcher{
 		this.sceneControls = new THREE.Scene();
 
 		this.screenOrientation = window.orientation || 0;
+		// Retain instance-owned callbacks so disposal can remove only this control's listeners.
+		this.disposed = false;
+		this._deviceOrientationEventType = null;
 
-		let deviceOrientationChange = e => {
+		this._onDeviceOrientationChange = e => {
 			this.deviceOrientation = e;
 		};
 
-		let screenOrientationChange = e => {
+		this._onScreenOrientationChange = e => {
 			this.screenOrientation = window.orientation || 0;
 		};
 
 		if ('ondeviceorientationabsolute' in window) {
-			window.addEventListener('deviceorientationabsolute', deviceOrientationChange);
+			this._deviceOrientationEventType = 'deviceorientationabsolute';
 		} else if ('ondeviceorientation' in window) {
-			window.addEventListener('deviceorientation', deviceOrientationChange);
+			this._deviceOrientationEventType = 'deviceorientation';
 		} else {
 			console.warn("No device orientation found.");
 		}
-		// window.addEventListener('deviceorientation', deviceOrientationChange);
-		window.addEventListener('orientationchange', screenOrientationChange);
+		if (this._deviceOrientationEventType) {
+			window.addEventListener(this._deviceOrientationEventType, this._onDeviceOrientationChange);
+		}
+		window.addEventListener('orientationchange', this._onScreenOrientationChange);
+	}
+
+	/** Release this control's global subscriptions without affecting another Viewer. */
+	dispose() {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.enabled = false;
+		if (this._deviceOrientationEventType) {
+			window.removeEventListener(this._deviceOrientationEventType, this._onDeviceOrientationChange);
+		}
+		window.removeEventListener('orientationchange', this._onScreenOrientationChange);
 	}
 
 	setScene (scene) {

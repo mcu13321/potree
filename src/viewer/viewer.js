@@ -2091,6 +2091,8 @@ export class Viewer extends EventDispatcher{
 	}
 
 	initDragAndDrop(){
+		// Reinitialization replaces only this Viewer's existing body subscriptions.
+		this.disposeDragAndDrop();
 		function allowDrag(e) {
 			e.dataTransfer.dropEffect = 'copy';
 			e.preventDefault();
@@ -2154,9 +2156,23 @@ export class Viewer extends EventDispatcher{
 		};
 
 
-		$("body")[0].addEventListener("dragenter", allowDrag);
-		$("body")[0].addEventListener("dragover", allowDrag);
-		$("body")[0].addEventListener("drop", dropHandler);
+		// Keep the original target and callbacks available for explicit instance disposal.
+		const target = $("body")[0];
+		this._dragAndDropListeners = {target, allowDrag, dropHandler};
+		target.addEventListener("dragenter", allowDrag);
+		target.addEventListener("dragover", allowDrag);
+		target.addEventListener("drop", dropHandler);
+	}
+
+	/** Detach only this Viewer's global drag-and-drop listeners; repeated cleanup is safe. */
+	disposeDragAndDrop(){
+		const listeners = this._dragAndDropListeners;
+		if (!listeners) return;
+		const {target, allowDrag, dropHandler} = listeners;
+		target.removeEventListener("dragenter", allowDrag);
+		target.removeEventListener("dragover", allowDrag);
+		target.removeEventListener("drop", dropHandler);
+		this._dragAndDropListeners = null;
 	}
 
 	initThree () {
