@@ -8,6 +8,9 @@ import { PotreeRenderer as ViewerPotreeRenderer } from "../src/viewer/PotreeRend
 import { Utils } from "../src/utils.js";
 import { NormalizationEDLMaterial } from "../src/materials/NormalizationEDLMaterial.js";
 import {renderPointcloudOpacity} from "../src/viewer/PointcloudOpacityPipeline.js";
+import {PointCloudMaterial} from "../src/materials/PointCloudMaterial.js";
+import {Gradients} from "../src/materials/Gradients.js";
+import {syncPointcloudColorMaterial} from "../src/viewer/PointcloudPassMaterialUtils.js";
 
 function createRendererMock() {
 	return {
@@ -122,6 +125,84 @@ function createViewerForEffectRender(pointclouds, sourceKind = "single") {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+/** Observe native handle ownership without requiring a browser WebGL driver. */
+function createTextureRenderer() {
+	const gl = {
+		TEXTURE_2D: 3553,
+		createTexture: vi.fn(() => ({})),
+		deleteTexture: vi.fn(),
+	};
+	return {gl, renderer: new PotreeGLRenderer({getContext: () => gl})};
+}
+
+describe("Point-cloud texture lifecycle", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	// Repeated disposal must remove a native handle once, and later reuse must create a fresh handle.
+	it("evicts disposed textures and safely reuploads a previously disposed texture", () => {
+		const {renderer, gl} = createTextureRenderer();
+		const texture = new THREE.Texture();
+		const first = renderer.getTexture(texture);
+		expect(renderer.getTexture(texture)).toBe(first);
+		expect(gl.createTexture).toHaveBeenCalledOnce();
+		texture.dispose();
+		texture.dispose();
+		expect(renderer.textures.size).toBe(0);
+		expect(gl.deleteTexture).toHaveBeenCalledExactlyOnceWith(first.id);
+		const second = renderer.getTexture(texture);
+		expect(second.id).not.toBe(first.id);
+		expect(renderer.textures.size).toBe(1);
+		texture.dispose();
+		expect(renderer.textures.size).toBe(0);
+		expect(gl.deleteTexture).toHaveBeenCalledTimes(2);
+	});
+
+	// A shared Three texture still has independent GPU handles in separate renderer contexts.
+	it("releases a shared texture independently in every owning renderer", () => {
+		const first = createTextureRenderer(), second = createTextureRenderer();
+		const texture = new THREE.Texture();
+		const a = first.renderer.getTexture(texture), b = second.renderer.getTexture(texture);
+		texture.dispose();
+		expect(first.renderer.textures.size).toBe(0);
+		expect(second.renderer.textures.size).toBe(0);
+		expect(first.gl.deleteTexture).toHaveBeenCalledExactlyOnceWith(a.id);
+		expect(second.gl.deleteTexture).toHaveBeenCalledExactlyOnceWith(b.id);
+	});
+
+	// Exercise actual material setters and pass synchronization, rather than only disposal events.
+	it("keeps the native gradient cache bounded through repeated scene and offscreen palette changes", () => {
+		vi.spyOn(PointCloudMaterial, "generateGradientTexture").mockImplementation(() => new THREE.Texture());
+		vi.spyOn(PointCloudMaterial, "generateMatcapTexture").mockImplementation(() => new THREE.Texture());
+		vi.stubGlobal("Potree", {PointCloudMaterial});
+		const source = new PointCloudMaterial(), pass = new PointCloudMaterial();
+		const {renderer, gl} = createTextureRenderer();
+		const upload = () => {
+			for (const material of [source, pass]) renderer.getTexture(material.gradientTexture);
+		};
+		upload();
+		for (let index = 0; index < 25; index++) {
+			for (const palette of [Gradients.VIRIDIS, Gradients.SPECTRAL]) {
+				source.gradient = palette;
+				syncPointcloudColorMaterial(source, pass);
+				upload();
+				expect(renderer.textures.size).toBe(2);
+				expect(source.gradientTexture).not.toBe(pass.gradientTexture);
+				const texture = source.gradientTexture;
+				source.gradient = palette;
+				expect(source.gradientTexture).toBe(texture);
+				expect(source.uniforms.gradient.value).toBe(texture);
+			}
+		}
+		source.gradientTexture.dispose();
+		pass.gradientTexture.dispose();
+		expect(renderer.textures.size).toBe(0);
+		expect(gl.createTexture).toHaveBeenCalledTimes(102);
+		expect(gl.deleteTexture).toHaveBeenCalledTimes(102);
+		source.dispose();
+		pass.dispose();
+	});
 });
 
 describe("Render effect routing", () => {

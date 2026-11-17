@@ -559,6 +559,22 @@ export class Renderer {
 		this.toggle = 0;
 	}
 
+	/** Cache one native handle per texture and release it with the texture's disposal event. */
+	getTexture(texture) {
+		let webglTexture = this.textures.get(texture);
+		if (!webglTexture) {
+			webglTexture = new WebGLTexture(this.gl, texture);
+			const disposeHandler = () => {
+				this.gl.deleteTexture(webglTexture.id);
+				this.textures.delete(texture);
+				texture.removeEventListener("dispose", disposeHandler);
+			};
+			this.textures.set(texture, webglTexture);
+			texture.addEventListener("dispose", disposeHandler);
+		}
+		return webglTexture;
+	}
+
 	deleteBuffer(geometry) {
 
 		let gl = this.gl;
@@ -1176,13 +1192,8 @@ export class Renderer {
 						continue;
 					}
 
-					if (!this.textures.has(texture)) {
-						let webglTexture = new WebGLTexture(gl, texture);
-
-						this.textures.set(texture, webglTexture);
-					}
-
-					let webGLTexture = this.textures.get(texture);
+						// Texture disposal must also evict the custom renderer's native handle.
+						let webGLTexture = this.getTexture(texture);
 					webGLTexture.update();
 
 

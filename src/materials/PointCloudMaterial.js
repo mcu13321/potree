@@ -334,9 +334,13 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 
 	set gradient (value) {
 		if (this._gradient !== value) {
+			const texture = PointCloudMaterial.generateGradientTexture(value);
+			const oldTexture = this.gradientTexture;
 			this._gradient = value;
-			this.gradientTexture = PointCloudMaterial.generateGradientTexture(this._gradient);
+			this.gradientTexture = texture;
 			this.uniforms.gradient.value = this.gradientTexture;
+			// Release replaced palettes in both scene materials and offscreen pass materials.
+			if (oldTexture !== texture) oldTexture?.dispose();
 		}
 	}
 
