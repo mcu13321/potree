@@ -30,6 +30,23 @@ npm test -- test/buildRelease.test.js test/PotreeSourceRegression.test.js
 
 ## 产物与记录
 
+### Browser compatibility
+
+Release builds target Chrome / Android WebView 83 and ES2020 syntax. The viewer
+bundle and both bundled and concatenated decoder workers use the same compiler
+settings. The browser entry bundles the `Array.prototype.at` polyfill locally;
+it does not depend on polyfills installed by an iframe's parent page.
+
+Before generating the manifest, the release checks every distributed JavaScript
+file against the ES2020 grammar, including copied lazy libraries. A syntax
+failure rolls back the release using the existing build transaction. Syntax
+lowering does not automatically supply other runtime or WebGL APIs; new runtime
+API dependencies need their own compatibility checks and polyfills.
+
+The checks cover generated script compatibility, not a physical-device rendering
+test. Performance-monitoring scripts injected by browser tools are outside the
+Potree distribution.
+
 每次完整构建等待所有资源流和 Rollup 成功完成后，生成源码根目录和 build/potree 中内容完全一致的 version.json。它记录版本、内容标识 buildId、UTC 构建时间、构建时的 Git HEAD/分支/未提交状态、已提交版本、Node 版本、锁文件摘要以及全部产物的路径/字节数/SHA-256。构建记录里的源码提交号指构建时 HEAD，不预先假定尚未创建的提交号。
 
 buildId 使用版本、源码 HEAD 与产物摘要组合；同版本的不同内容可被识别。计算摘要时排除 version.json 自身。根目录 version.json 和构建锁不纳入 Git，历史由外层项目提交和 CI 构建产物保存。复制已有产物不会递增版本。

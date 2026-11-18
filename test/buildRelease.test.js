@@ -4,8 +4,14 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createContext, runInContext } from 'node:vm';
+import { rollup } from 'rollup';
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
+import { parse } from 'acorn';
 import { parseBuildArgs, resolveBuildVersion, runBuild } from '../scripts/build.mjs';
 import { inventory, syncBuild, validateTarget, verifyBuild } from '../scripts/sync-potree.mjs';
+import { browserCompatibilityPlugin, transpileWorker, verifyBrowserScripts } from '../scripts/browser-compatibility.mjs';
 
 const fixtures = [];
 // Real Git and Windows filesystem transactions need room for bounded sharing-violation retries.
@@ -172,6 +178,84 @@ it('rolls back auto versions, output and records when compilation fails', async 
   expect(await fs.readFile(path.join(h.target, 'version.json'), 'utf8')).toBe(previous);
   await verifyBuild(h.output);
   await expect(fs.access(path.join(h.root, '.potree-build.lock'))).rejects.toThrow();
+});
+
+// Use the real browser entry and polyfill, replacing only the WebGL-heavy runtime.
+it('builds a standalone browser bundle with short-circuit semantics and a local Array.at polyfill', async () => {
+  const entry = path.resolve('src/PotreeBrowser.js');
+  const h = await fixture();
+  const runtime = path.join(h.root, 'compatibility-runtime.js');
+  const source = `export function probe() {
+    const effects = [];
+    const state = { get value() { effects.push('get'); return 1; }, set value(_) { effects.push('set'); } };
+    state.value ||= effects.push('rhs');
+    let selected;
+    selected ??= [1, 2, 3].at(-1);
+    return { effects, selected, first: [1, 2, 3].at(0), outside: [1].at(2) === undefined };
+  }`;
+  // A real fixture module also verifies that the composed map retains original source text.
+  await fs.writeFile(runtime, source);
+  expect(() => parse(source, { ecmaVersion: 2020, sourceType: 'module' })).toThrow();
+  const bundle = await rollup({
+    input: entry,
+    plugins: [
+      {
+        name: 'compatibility-runtime-fixture',
+        resolveId(id, importer) { if (id === './Potree.js' && path.resolve(importer) === entry) return runtime; },
+      },
+      nodeResolve({ browser: true }),
+      commonjs({ include: 'node_modules/core-js/**' }),
+      browserCompatibilityPlugin(),
+    ],
+  });
+  try {
+    const { output } = await bundle.generate({ format: 'umd', name: 'CompatibilityFixture', sourcemap: true });
+    const chunk = output.find((item) => item.type === 'chunk');
+    expect(() => parse(chunk.code, { ecmaVersion: 2020 })).not.toThrow();
+    expect(chunk.map.sourcesContent).toContain(source);
+    const legacy = createContext({});
+    runInContext('delete Array.prototype.at', legacy);
+    expect(runInContext('typeof Array.prototype.at', legacy)).toBe('undefined');
+    runInContext(chunk.code, legacy);
+    expect(JSON.parse(runInContext('JSON.stringify(CompatibilityFixture.probe())', legacy))).toEqual({
+      effects: ['get'], selected: 3, first: 1, outside: true,
+    });
+    expect(runInContext('Array.prototype.propertyIsEnumerable("at")', legacy)).toBe(false);
+    // Modern browsers retain their existing native API instead of receiving a replacement.
+    const modern = createContext({});
+    runInContext('globalThis.originalAt = Array.prototype.at', modern);
+    runInContext(chunk.code, modern);
+    expect(runInContext('Array.prototype.at === originalAt', modern)).toBe(true);
+  } finally {
+    await bundle.close();
+  }
+});
+
+it('lowers concatenated worker syntax without introducing window dependencies', async () => {
+  const h = await fixture();
+  await h.compile();
+  const file = path.join(h.output, 'workers/2.0/DecoderWorker.js');
+  await fs.writeFile(file, 'self.onmessage = ({data}) => { let value; value ??= data; self.postMessage(value); };');
+  await transpileWorker(file);
+  await verifyBrowserScripts(h.output);
+  const postMessage = vi.fn();
+  const context = createContext({ self: { postMessage } });
+  runInContext(await fs.readFile(file, 'utf8'), context);
+  context.self.onmessage({ data: 42 });
+  expect(postMessage).toHaveBeenCalledWith(42);
+});
+
+it('rolls back a release when a copied lazy script contains unsupported syntax', async () => {
+  const h = await fixture();
+  await runBuild(h);
+  const previous = await fs.readFile(path.join(h.root, 'version.json'), 'utf8');
+  await expect(runBuild({ ...h, compile: async () => {
+    await h.compile();
+    await fs.writeFile(path.join(h.output, 'lazylibs/sql.js/new-api.js'), 'let value; value ||= 1;');
+  } })).rejects.toThrow('Chrome 83 syntax check failed');
+  expect(await fs.readFile(path.join(h.root, 'version.json'), 'utf8')).toBe(previous);
+  expect(await fs.readFile(path.join(h.target, 'version.json'), 'utf8')).toBe(previous);
+  await verifyBuild(h.output);
 });
 
 it('rolls back when target verification fails and preserves the previous destination', async () => {

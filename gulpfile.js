@@ -121,6 +121,11 @@ gulp.task("workers", async function(){
     )),
     pipeline(gulp.src('./libs/copc/laz-perf.wasm', {encoding: false}), gulp.dest('build/potree/workers'))
   ]);
+  // These workers are concatenated rather than bundled, so lower them explicitly.
+  const {transpileWorker} = await import('./scripts/browser-compatibility.mjs');
+  await Promise.all(Object.keys(workers).map((name) =>
+    transpileWorker(path.join(__dirname, 'build/potree/workers', name + '.js'))
+  ));
 });
 
 gulp.task("lazylibs", async function(){
