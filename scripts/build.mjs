@@ -6,7 +6,6 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assertPlainPath, inventory, removeChild, renameDirectory, sha256, syncBuild, validateTarget, verifyBuild } from './sync-potree.mjs';
-import { verifyBrowserScripts } from './browser-compatibility.mjs';
 
 // Preserve clean rebuilds; allocate a patch only when the source worktree has changes.
 export function resolveBuildVersion(committed, current, explicit, dirty = false) {
@@ -94,8 +93,6 @@ export async function runBuild({ root = fileURLToPath(new URL('..', import.meta.
     }
     replacedOutput = true;
     await (compile ?? (() => compilePotree(root)))();
-    // Validate every shipped script, including lazy libraries outside the bundler.
-    await verifyBrowserScripts(output);
     const files = await inventory(output);
     const artifactSha256 = sha256(JSON.stringify(files));
     const manifest = {

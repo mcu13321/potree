@@ -15,11 +15,9 @@ const packageVersionPlugin = {
 };
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
-// Apply the same browser target to the viewer and every Rollup-generated worker.
-import { browserCompatibilityPlugin } from './scripts/browser-compatibility.mjs';
 export default [
 	{
-		input: 'src/PotreeBrowser.js',
+		input: 'src/Potree.js',
 		treeshake: false,
 		plugins: [
 			packageVersionPlugin,
@@ -28,10 +26,9 @@ export default [
 				preferBuiltins: false
 			}),
 			commonjs({
-				include: ['libs/konva/**', 'node_modules/core-js/**'],
+				include: 'libs/konva/**',
 				requireReturnsDefault: 'auto'
-			}),
-			browserCompatibilityPlugin()
+			})
 		],
 		output: {
 			file: 'build/potree/potree.js',
@@ -41,7 +38,6 @@ export default [
 		}
 	},{
 		input: 'src/workers/BinaryDecoderWorker.js',
-		plugins: [browserCompatibilityPlugin()],
 		output: {
 			file: 'build/potree/workers/BinaryDecoderWorker.js',
 			format: 'es',
@@ -50,7 +46,6 @@ export default [
 		}
 	},{
 		input: 'src/modules/loader/2.0/DecoderWorker.js',
-		plugins: [browserCompatibilityPlugin()],
 		output: {
 			file: 'build/potree/workers/2.0/DecoderWorker.js',
 			format: 'es',
@@ -59,7 +54,6 @@ export default [
 		}
 	},{
 		input: 'src/modules/loader/2.0/DecoderWorker_brotli.js',
-		plugins: [browserCompatibilityPlugin()],
 		output: {
 			file: 'build/potree/workers/2.0/DecoderWorker_brotli.js',
 			format: 'es',
