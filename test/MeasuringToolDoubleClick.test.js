@@ -11,6 +11,12 @@ vi.mock("../libs/konva/lib/shapes/Circle.js", () => ({Circle: class {
 const {MeasuringTool} = await import("../src/utils/MeasuringTool.js");
 
 describe("Measurement preview after native double clicks", () => {
+	it("cancels orthogonal placement before ordinary insertion", () => {
+		// Preserve exclusive ownership without changing ordinary insertion behavior.
+		viewer.orthogonalMeasurementTool = {stopInsertion: vi.fn()};
+		tool.startInsertion({name: "length"});
+		expect(viewer.orthogonalMeasurementTool.stopInsertion).toHaveBeenCalledWith(false);
+	});
 	let viewer;
 	let tool;
 	let pick;

@@ -28,6 +28,8 @@ import {Sidebar} from "./sidebar.js";
 import {AnnotationTool} from "../utils/AnnotationTool.js";
 import {MeasureMagnifier} from "../utils/MeasureMagnifier.js";
 import {MeasuringTool} from "../utils/MeasuringTool.js";
+// Orthogonal creation and constrained editing share the existing measurement model.
+import {OrthogonalMeasurementTool} from "../utils/OrthogonalMeasurementTool.js";
 import {ProfileTool} from "../utils/ProfileTool.js";
 import {VolumeTool} from "../utils/VolumeTool.js";
 // Passive labels are opt-in and independent of selection tools.
@@ -390,6 +392,8 @@ export class Viewer extends EventDispatcher{
 		this.cadVectorTool = new CadVectorTool(this);
 		this.crossSectionPreviewTool = new CrossSectionPreviewTool(this);
 		this.axisLineMarkerTool = new AxisLineMarkerTool(this);
+		// Own one controller per viewer, independently of point-cloud layer mounts.
+		this.orthogonalMeasurementTool = new OrthogonalMeasurementTool(this);
 		this.measureMagnifier = new MeasureMagnifier(this);
 		this.profileTool = new ProfileTool(this);
 		this.volumeTool = new VolumeTool(this);

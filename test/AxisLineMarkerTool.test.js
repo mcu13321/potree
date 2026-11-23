@@ -88,6 +88,15 @@ function dispatchMouse(target, type, {button = 0, clientX, clientY}) {
 }
 
 describe("AxisLineMarkerTool", () => {
+	it("cancels orthogonal placement before taking over input", () => {
+		// Axis marking and orthogonal drawing must be mutually exclusive.
+		const viewer = new MockViewer();
+		viewer.orthogonalMeasurementTool = {stopInsertion: vi.fn()};
+		const tool = new AxisLineMarkerTool(viewer);
+		tool.startInsertion();
+		expect(viewer.orthogonalMeasurementTool.stopInsertion).toHaveBeenCalledWith(false);
+		tool.stopInsertion();
+	});
 	let tool;
 
 	afterEach(() => {

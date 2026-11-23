@@ -101,6 +101,8 @@ export class AxisLineMarkerTool extends EventDispatcher {
 	}
 
 	startInsertion() {
+		// Prevent two drawing controllers from sharing the same pointer gesture.
+		this.viewer.orthogonalMeasurementTool?.stopInsertion(false);
 		this.stopInsertion({discardDraft: true, reason: "restarted"});
 		this.viewer.measuringTool?.stopInsertion?.();
 		this.lockTopView();

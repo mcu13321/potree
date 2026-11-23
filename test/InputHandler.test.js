@@ -48,6 +48,20 @@ function createTouchLikeEvent(type, {touches = [], changedTouches = []} = {}) {
 }
 
 describe("InputHandler", () => {
+	it("does not drag saved markers while orthogonal placement owns input", () => {
+		// Exercise the real mouse gate before handing off to marker callbacks.
+		const marker = new THREE.Object3D();
+		marker.addEventListener("drag", vi.fn());
+		viewer.controls = {enabled: true};
+		viewer.orthogonalMeasurementTool = {active: true};
+		vi.spyOn(inputHandler, "getHoveredElements").mockReturnValue([{object: marker, point: new THREE.Vector3()}]);
+		inputHandler.getMousePointCloudIntersection = vi.fn(() => null);
+		inputHandler.onMouseDown(new MouseEvent("mousedown", {button: 0, clientX: 130, clientY: 90}));
+		expect(inputHandler.drag?.object).not.toBe(marker);
+		viewer.orthogonalMeasurementTool.active = false;
+		inputHandler.onMouseDown(new MouseEvent("mousedown", {button: 0, clientX: 130, clientY: 90}));
+		expect(inputHandler.drag.object).toBe(marker);
+	});
 	let viewer;
 	let inputHandler;
 

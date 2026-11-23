@@ -131,6 +131,8 @@ function createCameraAnimationData(animation){
 		...(measurement.isAxisLineMarker
 			? {type: "AxisLineMarker", visible: measurement.visible !== false}
 			: {}),
+		// Preserve the locked world axis and result visibility across reloads.
+		...(measurement.name === "orthogonal" ? {orthogonalAxis: measurement.orthogonalAxis, visible: measurement.visible !== false} : {}),
 		uuid: measurement.uuid,
 		name: measurement.name,
 		points: measurement.points.map(p => p.position.toArray()),

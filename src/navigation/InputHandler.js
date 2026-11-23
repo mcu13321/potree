@@ -188,7 +188,8 @@ export class InputHandler extends EventDispatcher {
 					el.object._listeners['drag'] &&
 					el.object._listeners['drag'].length > 0));
 			
-			if (target && target.object && !this.measurementReadonly ) {
+			// Orthogonal creation owns input instead of saved-marker dragging.
+			if (target && target.object && !this.measurementReadonly && !this.viewer.orthogonalMeasurementTool?.active) {
 				this.isMeasurementEdit = true;
 				this.startDragging(target.object, {location: target.point});
 				target.object.dispatchEvent({type: 'active'})
@@ -409,7 +410,8 @@ export class InputHandler extends EventDispatcher {
 					el.object._listeners['drag'] &&
 					el.object._listeners['drag'].length > 0));
 			
-			if (target && target.object && !this.measurementReadonly ) {
+			// Orthogonal creation owns input instead of saved-marker dragging.
+			if (target && target.object && !this.measurementReadonly && !this.viewer.orthogonalMeasurementTool?.active) {
 				this.isMeasurementEdit = true;
 				this.startDragging(target.object, {location: target.point});
 				target.object.dispatchEvent({type: 'active'})

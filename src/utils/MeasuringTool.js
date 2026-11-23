@@ -297,6 +297,8 @@ export class MeasuringTool extends EventDispatcher{
 	}
 
 	startInsertion (args = {}) {
+		// Ordinary insertion takes exclusive ownership from orthogonal placement.
+		this.viewer.orthogonalMeasurementTool?.stopInsertion(false);
 		this.viewer.axisLineMarkerTool?.stopInsertion?.({
 			discardDraft: true,
 			reason: "other_measurement_started",
@@ -476,6 +478,8 @@ export class MeasuringTool extends EventDispatcher{
 	}
 
 	stopInsertion(type = 'measurement'){
+		// Existing host stop commands must cancel orthogonal drafts and edits too.
+		this.viewer.orthogonalMeasurementTool?.stopInsertion(false);
 		this.measurementTypeName = null;
 		this.eventMeasurement = null;
 		this.viewer.inputHandler.endDragging();

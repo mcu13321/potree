@@ -138,18 +138,27 @@ describe("OctreeLoader", () => {
 	});
 
 	it("根节点首包请求失败时应 reject", async () => {
-		fetch
-			.mockResolvedValueOnce(createJsonResponse(createMetadata()))
-			.mockResolvedValueOnce(createBufferResponse(createHierarchyBuffer()))
-			.mockResolvedValueOnce({
-				ok: false,
-				status: 503,
-				statusText: "Service Unavailable",
-				arrayBuffer: vi.fn(),
-			});
+		// Keep every retry at HTTP 503 and advance the loader's backoff without waiting in real time.
+		vi.useFakeTimers();
+		try {
+			fetch
+				.mockResolvedValueOnce(createJsonResponse(createMetadata()))
+				.mockResolvedValueOnce(createBufferResponse(createHierarchyBuffer()))
+				.mockResolvedValue({
+					ok: false,
+					status: 503,
+					statusText: "Service Unavailable",
+					arrayBuffer: vi.fn(),
+				});
 
-		await expect(OctreeLoader.load("/pc/metadata.json")).rejects.toThrow("octree.bin");
-		expect(globalThis.Potree.numNodesLoading).toBe(0);
-		expect(worker.postMessage).not.toHaveBeenCalled();
+			const rejection = expect(OctreeLoader.load("/pc/metadata.json")).rejects.toThrow(/octree\.bin: 503/);
+			await vi.runAllTimersAsync();
+			await rejection;
+			expect(fetch).toHaveBeenCalledTimes(6);
+			expect(globalThis.Potree.numNodesLoading).toBe(0);
+			expect(worker.postMessage).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
