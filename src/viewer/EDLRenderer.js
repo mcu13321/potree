@@ -4,7 +4,7 @@ import {PointCloudSM} from "../utils/PointCloudSM.js";
 import {EyeDomeLightingMaterial} from "../materials/EyeDomeLightingMaterial.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
-import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
+import {applyPointcloudXrayOpacity, getPointcloudEffectState, isGroupPointcloudSource, partitionPointcloudsByEDL} from "./PointcloudEffectUtils.js";
 import {partitionPointcloudsByOpacity, renderPointcloudOpacity} from "./PointcloudOpacityPipeline.js";
 
 export class EDLRenderer{
@@ -186,9 +186,6 @@ export class EDLRenderer{
 	}
 
 	_configureRegularPointclouds(pointclouds, camera, isGroupSource){
-		// XRAY distance ramp 是否启用只取决于来源模式。
-		const xrayUseDistanceRamp = isGroupSource ? 0 : 1;
-
 		for (const pointcloud of pointclouds) {
 			const {material} = pointcloud;
 			const effectState = getPointcloudEffectState(pointcloud, this.viewer.isEDLSupported());
@@ -211,9 +208,8 @@ export class EDLRenderer{
 				material.cameraPosition = camera.position;
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
-				material.uXrayUseDistanceRamp = xrayUseDistanceRamp;
-				// EDL 模式下的普通点云仍走同一套 XRAY shader，因此这里也要同步下发动态透明度。
-				material.uXrayMultiOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
+				// The regular pass in the EDL renderer uses the same XRay opacity policy.
+				applyPointcloudXrayOpacity(material, pointcloud, camera.position, bbox, isGroupSource);
 			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;

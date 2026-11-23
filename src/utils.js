@@ -1099,9 +1099,12 @@ export class Utils {
 	static async retryFetch(url, options = {}, retryOptions = {}) {
 		const maxRetries = retryOptions.maxRetries ?? 3;
 		const initialDelay = retryOptions.initialDelay ?? 1000;
+		const signal = options.signal;
 		let lastError = null;
 
 		for (let i = 0; i <= maxRetries; i++) {
+			// An aborted background request must release its slot even during backoff.
+			if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
 			try {
 				const response = await fetch(url, options);
 				
@@ -1116,14 +1119,23 @@ export class Utils {
 				console.warn(`Fetch failed for ${url} (Status: ${response.status}). Retrying... (${i + 1}/${maxRetries})`);
 			} catch (error) {
 				lastError = error;
-				if (i === maxRetries) {
+				if (i === maxRetries || signal?.aborted) {
 					throw error;
 				}
 				console.warn(`Fetch error for ${url}: ${error.message}. Retrying... (${i + 1}/${maxRetries})`);
 			}
 
 			const delay = initialDelay * Math.pow(2, i);
-			await new Promise(resolve => setTimeout(resolve, delay));
+			await new Promise(resolve => {
+				const finish = () => {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", finish);
+					resolve();
+				};
+				const timer = setTimeout(finish, delay);
+				if (signal?.aborted) finish();
+				else signal?.addEventListener("abort", finish, {once: true});
+			});
 		}
 
 		throw lastError || new Error(`Failed to fetch ${url} after ${maxRetries} retries`);

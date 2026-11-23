@@ -8,6 +8,7 @@ import {Renderer} from "../PotreeRenderer.js";
 import {PotreeRenderer} from "./PotreeRenderer.js";
 import {EDLRenderer} from "./EDLRenderer.js";
 import {HQSplatRenderer} from "./HQSplatRenderer.js";
+import {FixedXray} from "./FixedXray.js";
 import {isXraySplatPipelineSupported} from "./XraySplatPipeline.js";
 import {
 	areXrayRenderSettingsEqual,
@@ -643,6 +644,7 @@ export class Viewer extends EventDispatcher{
 
 	setPauseRender (value) {
 		this.pauseRender = value;
+		if(value) this.fixedXray?.pause();
 	}
 
 	getMinNodeSize () {
@@ -3047,7 +3049,12 @@ export class Viewer extends EventDispatcher{
 		}
 
 		this.update(this.clock.getDelta(), timestamp);
+		// Give native visibility the first opportunity to schedule its requests each frame.
+		this.fixedXray ??= new FixedXray(this);
+		if(this.freeze) this.fixedXray.pause();
+		else this.fixedXray.update(timestamp);
 		this.render();
+		if(!this.freeze) this.fixedXray.recordFrame(timestamp);
 
 		// let vrActive = viewer.renderer.xr.isPresenting;
 		// if(vrActive){

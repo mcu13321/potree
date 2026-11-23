@@ -273,6 +273,8 @@ export class HQSplatRenderer{
 		const xrayPointclouds = regularPointclouds.filter(pointcloud => {
 			return getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
 		});
+		// Pass the same fixed snapshot to both XRay passes, including offscreen magnification.
+		const fixedXray = viewer.fixedXray?.frame(xrayPointclouds, camera, offscreen);
 		// Whole-layer opacity bypasses weighted accumulation and the Xray resolve pipeline.
 		const {solidPointclouds: standardPointclouds, opacityPointclouds} = partitionPointcloudsByOpacity(regularPointclouds.filter(pointcloud => {
 			return !getPointcloudEffectState(pointcloud, viewer.isEDLSupported()).xrayEnabled;
@@ -330,6 +332,7 @@ export class HQSplatRenderer{
 				camera,
 				width,
 				height,
+				...(fixedXray && {fixedNodes: fixedXray.nodes}),
 			});
 
 			this._renderPointcloudGroup({
@@ -365,10 +368,11 @@ export class HQSplatRenderer{
 			});
 		}
 		if(xrayPointclouds.length > 0){
+			const settings = fixedXray?.settings ?? viewer.getXrayRenderSettings();
 			if (target) {
-				this.xrayPipeline.resolve(viewer.getXrayRenderSettings(), target);
+				this.xrayPipeline.resolve(settings, target);
 			} else {
-				this.xrayPipeline.resolve(viewer.getXrayRenderSettings());
+				this.xrayPipeline.resolve(settings);
 			}
 		}
 		if(edlPointclouds.length > 0){

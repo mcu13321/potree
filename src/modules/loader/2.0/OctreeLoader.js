@@ -31,191 +31,168 @@ export class NodeLoader{
 		Potree.numNodesLoading++;
 
 		// 为每个节点缓存一次进行中的 Promise，避免并发重复发起同一个节点加载。
-		node._loadPromise = new Promise((resolve) => {
-			let settled = false;
-			let worker = null;
-			let workerPath = null;
-
-			const finalize = (result) => {
-				if(settled){
-					return;
-				}
-
-				settled = true;
-				node._loadPromise = null;
-				resolve(result);
-			};
-
-			const finishSuccess = (geometry, density) => {
-				if(settled){
-					return;
-				}
-
-				node.density = density;
-				node.geometry = geometry;
-				node.loaded = true;
-				node.loading = false;
-				Potree.numNodesLoading--;
-
-				finalize({success: true, node});
-			};
-
-			const finishFailure = (error) => {
-				if(settled){
-					return;
-				}
-
-				node.loaded = false;
-				node.loading = false;
-				Potree.numNodesLoading--;
-
-				if(worker){
-					worker.onmessage = null;
-					worker.onerror = null;
-					worker.onmessageerror = null;
-					if(typeof worker.terminate === "function"){
-						worker.terminate();
-					}
-					worker = null;
-				}
-
-				console.log(`failed to load ${node.name}`);
-				console.log(error);
-				console.log(`trying again!`);
-
-				finalize({success: false, node, error});
-			};
-
-			let loadTask = async () => {
-				try{
-					if(node.nodeType === 2){
-						await this.loadHierarchy(node);
-					}
-
-					let {byteOffset, byteSize} = node;
-					let urlOctree = this.getUrl ? await this.getUrl('octree.bin') : `${this.url}/../octree.bin`;
-
-					let first = byteOffset;
-					let last = byteOffset + byteSize - 1n;
-					let buffer;
-
-					if(byteSize === 0n){
-						buffer = new ArrayBuffer(0);
-						console.warn(`loaded node with 0 bytes: ${node.name}`);
-					}else{
-						let response = await Utils.retryFetch(urlOctree, {
-							headers: {
-								'content-type': 'multipart/byteranges',
-								'Range': `bytes=${first}-${last}`,
-							},
-						});
-
-						if(!response.ok){
-							throw createRequestError(urlOctree, response);
-						}
-
-						buffer = await response.arrayBuffer();
-					}
-
-					if(this.metadata.encoding === "BROTLI"){
-						workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
-					}else{
-						workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
-					}
-
-					worker = Potree.workerPool.getWorker(workerPath);
-
-					worker.onmessage = (e) => {
-						let data = e.data;
-						let buffers = data.attributeBuffers;
-
-						Potree.workerPool.returnWorker(workerPath, worker);
-						worker.onmessage = null;
-						worker.onerror = null;
-						worker.onmessageerror = null;
-						worker = null;
-
-						let geometry = new THREE.BufferGeometry();
-						
-						for(let property in buffers){
-							let attributeBuffer = buffers[property].buffer;
-
-							if(property === "position"){
-								geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
-							}else if(property === "rgba"){
-								geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4, true));
-							}else if(property === "NORMAL"){
-								// 法向量在 worker 中已经解码为连续的 float buffer，这里直接复用。
-								geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
-							}else if (property === "INDICES") {
-								let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4);
-								bufferAttribute.normalized = true;
-								geometry.setAttribute('indices', bufferAttribute);
-							}else{
-								const bufferAttribute = new THREE.BufferAttribute(new Float32Array(attributeBuffer), 1);
-
-								let batchAttribute = buffers[property].attribute;
-								bufferAttribute.potree = {
-									offset: buffers[property].offset,
-									scale: buffers[property].scale,
-									preciseBuffer: buffers[property].preciseBuffer,
-									range: batchAttribute.range,
-								};
-
-								geometry.setAttribute(property, bufferAttribute);
-							}
-
-						}
-
-						finishSuccess(geometry, data.density);
-					};
-
-					// worker 解码失败时必须显式回传错误，否则根节点加载会一直挂起。
-					worker.onerror = (event) => {
-						let error = event?.error ?? new Error(`decoder worker failed for node ${node.name}`);
-						finishFailure(error);
-					};
-
-					worker.onmessageerror = () => {
-						finishFailure(new Error(`decoder worker message error for node ${node.name}`));
-					};
-
-					let pointAttributes = node.octreeGeometry.pointAttributes;
-					let scale = node.octreeGeometry.scale;
-
-					let box = node.boundingBox;
-					let min = node.octreeGeometry.offset.clone().add(box.min);
-					let size = box.max.clone().sub(box.min);
-					let max = min.clone().add(size);
-					let numPoints = node.numPoints;
-
-					let offset = node.octreeGeometry.loader.offset;
-
-					let message = {
-						name: node.name,
-						buffer: buffer,
-						pointAttributes: pointAttributes,
-						scale: scale,
-						min: min,
-						max: max,
-						size: size,
-						offset: offset,
-						numPoints: numPoints
-					};
-
-					worker.postMessage(message, [message.buffer]);
-				}catch(e){
-					finishFailure(e);
-				}
-			};
-
-			loadTask();
-		});
-
+		node._loadPromise = this.loadNativeNode(node);
 		return node._loadPromise;
 	}
 
-	parseHierarchy(node, buffer){
+	// Native requests own the node's loading state, promise and global slot.
+	async loadNativeNode(node){
+		try{
+			if(node.nodeType === 2) await this.loadHierarchy(node);
+			const {geometry, density} = await this.readNodeGeometry(node);
+			node.density = density;
+			node.geometry = geometry;
+			node.loaded = true;
+			return {success: true, node};
+		}catch(error){
+			node.loaded = false;
+			console.log(`failed to load ${node.name}`);
+			console.log(error);
+			console.log("trying again!");
+			return {success: false, node, error};
+		}finally{
+			node.loading = false;
+			node._loadPromise = null;
+			Potree.numNodesLoading--;
+		}
+	}
+
+	/** Decode a detached XRay range without publishing a native node or taking a native slot. */
+	async loadFixedGeometry(node, signal){
+		const {geometry} = await this.readNodeGeometry(node, signal);
+		return geometry;
+	}
+
+	async readNodeGeometry(node, signal){
+		const {byteOffset, byteSize} = node;
+		const url = this.getUrl ? await this.getUrl('octree.bin') : `${this.url}/../octree.bin`;
+		if(signal?.aborted) throw new DOMException("XRay request aborted", "AbortError");
+		let buffer;
+		if(byteSize === 0n){
+			buffer = new ArrayBuffer(0);
+			console.warn(`loaded node with 0 bytes: ${node.name}`);
+		}else{
+			const options = {
+				headers: {
+					'content-type': 'multipart/byteranges',
+					'Range': `bytes=${byteOffset}-${byteOffset + byteSize - 1n}`,
+				},
+			};
+			const response = await Utils.retryFetch(url, signal ? {...options, signal, priority: "low"} : options);
+			if(!response.ok) throw createRequestError(url, response);
+			// Reject a whole-file response before reading its body, only on the XRay transport.
+			if(signal && response.status !== 206){
+				await response.body?.cancel();
+				throw new Error("XRay node requests require HTTP byte ranges");
+			}
+			buffer = await response.arrayBuffer();
+			if(signal && BigInt(buffer.byteLength) !== byteSize) throw new Error("Incomplete XRay node byte range");
+		}
+		return this.decodeNode(node, buffer, signal);
+	}
+
+	/** The two transports share the worker codec and idle pool; each owns its active job. */
+	decodeNode(node, buffer, signal){
+		return new Promise((resolve, reject) => {
+			const aborted = () => new DOMException("XRay request aborted", "AbortError");
+			if(signal?.aborted){
+				reject(aborted());
+				return;
+			}
+			const file = this.metadata.encoding === "BROTLI" ? "DecoderWorker_brotli.js" : "DecoderWorker.js";
+			const workerPath = Potree.scriptPath + '/workers/2.0/' + file;
+			const worker = Potree.workerPool.getWorker(workerPath);
+			const cleanup = () => {
+				worker.onmessage = null;
+				worker.onerror = null;
+				worker.onmessageerror = null;
+				signal?.removeEventListener("abort", onAbort);
+			};
+			const fail = error => {
+				cleanup();
+				worker.terminate?.();
+				reject(error);
+			};
+			const onAbort = () => fail(aborted());
+			signal?.addEventListener("abort", onAbort, {once: true});
+			worker.onmessage = ({data}) => {
+				try{
+					const buffers = data.attributeBuffers;
+					let geometry = new THREE.BufferGeometry();
+
+					for(let property in buffers){
+						let attributeBuffer = buffers[property].buffer;
+
+						if(property === "position"){
+							geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
+						}else if(property === "rgba"){
+							geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4, true));
+						}else if(property === "NORMAL"){
+							// 法向量在 worker 中已经解码为连续的 float buffer，这里直接复用。
+							geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(attributeBuffer), 3));
+						}else if (property === "INDICES") {
+							let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(attributeBuffer), 4);
+							bufferAttribute.normalized = true;
+							geometry.setAttribute('indices', bufferAttribute);
+						}else{
+							const bufferAttribute = new THREE.BufferAttribute(new Float32Array(attributeBuffer), 1);
+
+							let batchAttribute = buffers[property].attribute;
+							bufferAttribute.potree = {
+								offset: buffers[property].offset,
+								scale: buffers[property].scale,
+								preciseBuffer: buffers[property].preciseBuffer,
+								range: batchAttribute.range,
+							};
+
+							geometry.setAttribute(property, bufferAttribute);
+						}
+
+					}
+
+					cleanup();
+					Potree.workerPool.returnWorker(workerPath, worker);
+					resolve({geometry, density: data.density});
+				}catch(error){
+					fail(error);
+				}
+			};
+
+			// worker 解码失败时必须显式回传错误，否则根节点加载会一直挂起。
+			worker.onerror = event => fail(event?.error ?? new Error(`decoder worker failed for node ${node.name}`));
+			worker.onmessageerror = () => fail(new Error(`decoder worker message error for node ${node.name}`));
+			try{
+				let pointAttributes = node.octreeGeometry.pointAttributes;
+				let scale = node.octreeGeometry.scale;
+
+				let box = node.boundingBox;
+				let min = node.octreeGeometry.offset.clone().add(box.min);
+				let size = box.max.clone().sub(box.min);
+				let max = min.clone().add(size);
+				let numPoints = node.numPoints;
+
+				let offset = node.octreeGeometry.loader.offset;
+
+				let message = {
+					name: node.name,
+					buffer: buffer,
+					pointAttributes: pointAttributes,
+					scale: scale,
+					min: min,
+					max: max,
+					size: size,
+					offset: offset,
+					numPoints: numPoints
+				};
+
+				worker.postMessage(message, [message.buffer]);
+			}catch(error){
+				fail(error);
+			}
+		});
+	}
+
+	parseHierarchy(node, buffer, detached = false){
 
 		let view = new DataView(buffer);
 		let tStart = performance.now();
@@ -283,7 +260,10 @@ export class NodeLoader{
 				let childName = current.name + childIndex;
 
 				let childAABB = createChildAABB(current.boundingBox, childIndex);
-				let child = new OctreeGeometryNode(childName, octree, childAABB);
+				// Catalog descriptors keep their own links and never enter native visibility or LRU.
+				let child = detached
+					? {octreeGeometry: octree, boundingBox: childAABB, children: {}}
+					: new OctreeGeometryNode(childName, octree, childAABB);
 				child.name = childName;
 				child.spacing = current.spacing / 2;
 				child.level = current.level + 1;
@@ -307,6 +287,48 @@ export class NodeLoader{
 		// 	let msg = `duration: ${duration}ms, numNodes: ${numNodes}`;
 		// 	console.log(msg);
 		// }
+	}
+
+	/** Parse the XRay catalog into detached descriptors and leave native proxies untouched. */
+	async loadFixedHierarchy(root, signal){
+		const url = this.getUrl ? await this.getUrl('hierarchy.bin') : `${this.url}/../hierarchy.bin`;
+		const response = await fetch(url, {signal, priority: "low"});
+		if(!response.ok) throw createRequestError(url, response);
+		const bytes = await response.arrayBuffer();
+		const levels = [];
+		const offsets = new Set();
+		const queue = [{
+			name: root.name, level: root.level, spacing: root.spacing, nodeType: 2, children: {},
+			boundingBox: root.boundingBox, octreeGeometry: root.octreeGeometry,
+			hierarchyByteOffset: 0n, hierarchyByteSize: BigInt(this.metadata.hierarchy.firstChunkSize),
+		}];
+		let points = 0;
+		let deadline = performance.now() + 8;
+		for(let index = 0; index < queue.length; index++){
+			if(signal.aborted) throw new DOMException("XRay catalog request aborted", "AbortError");
+			const node = queue[index];
+			if(node.nodeType === 2){
+				const start = Number(node.hierarchyByteOffset);
+				const size = Number(node.hierarchyByteSize);
+				if(!Number.isSafeInteger(start) || !Number.isSafeInteger(size) || offsets.has(start) ||
+					start < 0 || size <= 0 || size % 22 || start + size > bytes.byteLength){
+					throw new RangeError(`Invalid XRay hierarchy page for ${node.name}`);
+				}
+				offsets.add(start);
+				this.parseHierarchy(node, bytes.slice(start, start + size), true);
+				if(node.nodeType === 2) throw new Error("Unresolved XRay hierarchy page");
+			}
+			levels[node.level] ??= [];
+			if(node.numPoints) levels[node.level].push(node);
+			points += node.numPoints;
+			queue.push(...Object.values(node.children));
+			if(performance.now() >= deadline){
+				await new Promise(resolve => setTimeout(resolve, 0));
+				deadline = performance.now() + 8;
+			}
+		}
+		if(!points || points !== this.metadata.points) throw new Error("XRay hierarchy point count does not match metadata");
+		return levels;
 	}
 
 	async loadHierarchy(node){

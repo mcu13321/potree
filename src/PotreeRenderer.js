@@ -583,6 +583,8 @@ export class Renderer {
 			for (let attributeName in geometry.attributes) {
 				gl.deleteBuffer(webglBuffer.vbos.get(attributeName).handle);
 			}
+			// Fixed samples can be rebuilt after a resource change, including their vertex arrays.
+			gl.deleteVertexArray?.(webglBuffer.vao);
 			this.buffers.delete(geometry);
 		}
 	}
@@ -1046,7 +1048,8 @@ export class Renderer {
 				}
 			}
 
-			let numPoints = webglBuffer.numElements;
+			// Fixed XRay buffers are ordered so a shorter prefix thins the entire node.
+			let numPoints = params.fixedXrayNodes ? node.drawCount : webglBuffer.numElements;
 			gl.drawArrays(gl.POINTS, 0, numPoints);
 
 			i++;
@@ -1095,8 +1098,8 @@ export class Renderer {
 		let currentTextureBindingPoint = 0;
 
 		if (material.pointSizeType >= 0) {
-			if (material.pointSizeType === PointSizeType.ADAPTIVE ||
-				material.activeAttributeName === "level of detail") {
+			if (!params.fixedXrayNodes && (material.pointSizeType === PointSizeType.ADAPTIVE ||
+				material.activeAttributeName === "level of detail")) {
 
 				let vnNodes = (params.vnTextureNodes != null) ? params.vnTextureNodes : nodes;
 				visibilityTextureData = octree.computeVisibilityTextureData(vnNodes, camera);
@@ -1497,7 +1500,8 @@ export class Renderer {
 
 		// RENDER
 		for (const octree of octrees) {
-			let nodes = octree.visibleNodes;
+			// The override is scoped to the XRay passes; picking still reads visibleNodes.
+			let nodes = params.fixedXrayNodes?.get(octree) ?? octree.visibleNodes;
 			this.renderOctree(octree, nodes, camera, target, params);
 		}
 

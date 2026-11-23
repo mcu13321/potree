@@ -193,9 +193,11 @@ describe("XraySplatPipeline", () => {
 		expect(isXraySplatPipelineSupported(webgl2)).toBe(true);
 	});
 
-	it("renders front and accumulation passes and restores the source material", () => {
+	it.each([false, true])("renders and restores materials with the per-point depth override set to %s", useDistanceRamp => {
 		const {pipeline, viewer} = createPipelineHarness();
 		const pointcloud = createPointcloud();
+		// Group mode alone must keep its existing per-cloud opacity.
+		pointcloud.treemindPointCloudSourceMode = {sourceKind: "group", xrayUseDistanceRamp: useDistanceRamp};
 		const sourceMaterial = pointcloud.material;
 		const frontMaterial = createPassMaterial();
 		const accumulationMaterial = createPassMaterial();
@@ -220,8 +222,8 @@ describe("XraySplatPipeline", () => {
 		});
 		expect(frontMaterial.activeAttributeName).toBe("rgba");
 		expect(frontMaterial.color).toBe(sourceMaterial.color);
-		expect(accumulationMaterial.uXrayUseDistanceRamp).toBe(0);
-		expect(accumulationMaterial.uXrayMultiOpacity).toBeCloseTo(0.0245);
+		expect(accumulationMaterial.uXrayUseDistanceRamp).toBe(useDistanceRamp ? 1 : 0);
+		expect(accumulationMaterial.uXrayMultiOpacity).toBeCloseTo(useDistanceRamp ? 0 : 0.0245);
 		expect(pointcloud.material).toBe(sourceMaterial);
 		expect(pipeline.frontTarget.setSize).toHaveBeenCalledWith(800, 600);
 		expect(pipeline.accumulationTarget.setSize).toHaveBeenCalledWith(800, 600);

@@ -1,11 +1,12 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
+import {PointSizeType} from "../defines.js";
 import {PointCloudMaterial} from "../materials/PointCloudMaterial.js";
 import {XrayNormalizationMaterial} from "../materials/XrayNormalizationMaterial.js";
 import {SphereVolume} from "../utils/Volume.js";
 import {Utils} from "../utils.js";
 import {
 	getPointcloudEffectState,
-	getPointcloudMultiXrayOpacity,
+	applyPointcloudXrayOpacity,
 	isGroupPointcloudSource,
 } from "./PointcloudEffectUtils.js";
 import {
@@ -136,11 +137,12 @@ export class XraySplatPipeline{
 		).xrayOpacity;
 		accumulationMaterial.uNear = Math.max(0, distanceToCenter - maxDimension / 2);
 		accumulationMaterial.uFar = distanceToCenter + maxDimension / 2;
-		accumulationMaterial.uXrayUseDistanceRamp = isGroupSource ? 0 : 1;
-		accumulationMaterial.uXrayMultiOpacity = getPointcloudMultiXrayOpacity(
+		applyPointcloudXrayOpacity(
+			accumulationMaterial,
 			pointcloud,
 			camera.position,
-			bbox
+			bbox,
+			isGroupSource
 		);
 
 		return {frontMaterial, accumulationMaterial};
@@ -176,7 +178,7 @@ export class XraySplatPipeline{
 		}
 	}
 
-	renderToTargets({pointclouds, originalMaterials, camera, width, height}){
+	renderToTargets({pointclouds, originalMaterials, camera, width, height, fixedNodes}){
 		if(pointclouds.length === 0){
 			return;
 		}
@@ -194,12 +196,21 @@ export class XraySplatPipeline{
 					pointcloud,
 					this._configureMaterials(pointcloud, source, camera, width, height, isGroupSource)
 				);
+				if(fixedNodes){
+					// Map the application's default 0.7 size to the experiment's two-pixel footprint.
+					const diameter = THREE.MathUtils.clamp(2 * source.size / 0.7, 1, 5);
+					for(const material of Object.values(materials.get(pointcloud))){
+						material.pointSizeType = PointSizeType.FIXED;
+						material.size = material.minSize = material.maxSize = diameter;
+					}
+				}
 				pointcloud.material = materials.get(pointcloud).frontMaterial;
 			}
 
 			this.viewer.pRenderer.render(this.viewer.scene.scenePointCloud, camera, this.frontTarget, {
 				clipSpheres: this.viewer.scene.volumes.filter(volume => volume instanceof SphereVolume),
 				pointclouds,
+				...(fixedNodes && {fixedXrayNodes: fixedNodes}),
 			});
 
 			for(const pointcloud of pointclouds){
@@ -213,6 +224,7 @@ export class XraySplatPipeline{
 				{
 					clipSpheres: this.viewer.scene.volumes.filter(volume => volume instanceof SphereVolume),
 					pointclouds,
+					...(fixedNodes && {fixedXrayNodes: fixedNodes}),
 					// The shader output is premultiplied, so accumulation uses additive ONE blending.
 					blendFunc: [this.gl.ONE, this.gl.ONE],
 					depthTest: false,

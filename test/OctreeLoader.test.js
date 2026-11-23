@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OctreeLoader } from "../src/modules/loader/2.0/OctreeLoader.js";
+import { Box3, Vector3 } from "../libs/three.js/build/three.module.js";
+import { NodeLoader, OctreeLoader } from "../src/modules/loader/2.0/OctreeLoader.js";
 
 function createMetadata() {
 	return {
@@ -107,6 +108,99 @@ describe("OctreeLoader", () => {
 		delete globalThis.Potree;
 		delete globalThis.fetch;
 		vi.restoreAllMocks();
+	});
+
+	it("hydrates XRay proxies without altering the native hierarchy", async () => {
+		const loader = new NodeLoader("/pc/metadata.json");
+		loader.metadata = {...createMetadata(), points: 4, hierarchy: {firstChunkSize: 44}};
+		const bounds = new Box3(new Vector3(), new Vector3(1, 1, 1));
+		const root = {name: "r", level: 0, spacing: 1, nodeType: 2, children: {}, boundingBox: bounds,
+			octreeGeometry: {}, hierarchyByteOffset: 0n, hierarchyByteSize: 44n};
+		const hierarchy = new Uint8Array(66);
+		hierarchy.set(new Uint8Array(createHierarchyBuffer(1)), 0);
+		hierarchy.set(new Uint8Array(createHierarchyBuffer(3)), 44);
+		// The root references a proxy in a second hierarchy page.
+		hierarchy[1] = 1;
+		hierarchy[22] = 2;
+		const view = new DataView(hierarchy.buffer);
+		view.setBigInt64(28, 44n, true);
+		view.setBigInt64(36, 22n, true);
+		fetch.mockResolvedValueOnce(createBufferResponse(hierarchy.buffer))
+			.mockResolvedValueOnce(createBufferResponse(hierarchy.buffer.slice(0, 44)));
+		const levels = await loader.loadFixedHierarchy(root, new AbortController().signal);
+		expect(levels[1][0]).toMatchObject({name: "r0", nodeType: 0, numPoints: 3});
+		expect(root).toMatchObject({nodeType: 2, children: {}});
+		expect(Object.keys(root.children)).toHaveLength(0);
+		await loader.loadHierarchy(root);
+		expect(root.children[0].nodeType).toBe(2);
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("rejects a whole-file XRay response without changing a concurrent native request", async () => {
+		const loader = new NodeLoader("/pc/metadata.json");
+		loader.metadata = createMetadata();
+		const node = {name: "r0", nodeType: 0, byteOffset: 12n, byteSize: 12n, numPoints: 1,
+			boundingBox: new Box3(new Vector3(), new Vector3(1, 1, 1)),
+			octreeGeometry: {offset: new Vector3(), loader}};
+		const cancel = vi.fn(async () => {});
+		const arrayBuffer = vi.fn();
+		const nativeResponse = {...createBufferResponse(new ArrayBuffer(12)), status: 200};
+		fetch.mockResolvedValueOnce({ok: true, status: 200, body: {cancel}, arrayBuffer}).mockResolvedValueOnce(nativeResponse);
+		const fixed = loader.loadFixedGeometry(node, new AbortController().signal);
+		const rejectsWholeFile = expect(fixed).rejects.toThrow(/require HTTP byte ranges/);
+		expect(node._loadPromise).toBeUndefined();
+		expect(Potree.numNodesLoading).toBe(0);
+		const native = loader.load(node);
+		expect(Potree.numNodesLoading).toBe(1);
+		await rejectsWholeFile;
+		await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledOnce());
+		worker.onmessage(createWorkerMessage());
+		expect(await native).toMatchObject({success: true});
+		expect(node.loaded).toBe(true);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(arrayBuffer).not.toHaveBeenCalled();
+		expect(nativeResponse.arrayBuffer).toHaveBeenCalledOnce();
+		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(Potree.numNodesLoading).toBe(0);
+	});
+
+	it("cancels an active XRay decoder without publishing native geometry", async () => {
+		const loader = new NodeLoader("/pc/metadata.json");
+		loader.metadata = createMetadata();
+		const node = {name: "r0", nodeType: 0, byteOffset: 0n, byteSize: 12n, numPoints: 1,
+			boundingBox: new Box3(new Vector3(), new Vector3(1, 1, 1)),
+			octreeGeometry: {offset: new Vector3(), loader}};
+		fetch.mockResolvedValueOnce(createBufferResponse(new ArrayBuffer(12)));
+		const controller = new AbortController();
+		const pending = loader.loadFixedGeometry(node, controller.signal);
+		const cancelled = expect(pending).rejects.toMatchObject({name: "AbortError"});
+		await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledOnce());
+		controller.abort();
+		await cancelled;
+		expect(worker.terminate).toHaveBeenCalledOnce();
+		expect(returnWorker).not.toHaveBeenCalled();
+		expect(node.geometry).toBeUndefined();
+		expect(node.loading).toBeUndefined();
+		expect(Potree.numNodesLoading).toBe(0);
+	});
+
+	it("releases a cancelled XRay request during HTTP backoff", async () => {
+		vi.useFakeTimers();
+		try{
+			const loader = new NodeLoader("/pc/metadata.json");
+			const node = {name: "r0", byteOffset: 0n, byteSize: 12n};
+			const controller = new AbortController();
+			fetch.mockResolvedValue({ok: false, status: 503});
+			const cancelled = expect(loader.loadFixedGeometry(node, controller.signal)).rejects.toMatchObject({name: "AbortError"});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(1);
+			controller.abort();
+			await cancelled;
+			expect(fetch).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		}finally{
+			vi.useRealTimers();
+		}
 	});
 
 	it("应等待根节点首包解码完成后再返回 geometry", async () => {

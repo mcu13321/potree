@@ -308,6 +308,11 @@ export class PointCloudOctree extends PointCloudTree {
 		}
 	}
 
+	/** Notify any Viewer-owned render buffers when the application releases this cloud. */
+	dispose(){
+		this.dispatchEvent({type: "dispose"});
+	}
+
 	updateMaterial (material, visibleNodes, camera, renderer) {
 		material.fov = camera.fov * (Math.PI / 180);
 		material.screenWidth = renderer.domElement.clientWidth;

@@ -1,7 +1,7 @@
 import {isPointCloudRuntimeHidden} from "../utils/PointCloudLabelAppearance.js";
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {getPointcloudEffectState, getPointcloudMultiXrayOpacity, isGroupPointcloudSource} from "./PointcloudEffectUtils.js";
+import {applyPointcloudXrayOpacity, getPointcloudEffectState, isGroupPointcloudSource} from "./PointcloudEffectUtils.js";
 import {partitionPointcloudsByOpacity, renderPointcloudOpacity} from "./PointcloudOpacityPipeline.js";
 
 
@@ -89,7 +89,7 @@ export class PotreeRenderer {
 
 		const visiblePointClouds = this.viewer.scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc));
 		// 单双点云模式统一由 sourceKind 决定，不再依赖可见数量。
-		const xrayUseDistanceRamp = isGroupPointcloudSource(viewer) ? 0 : 1;
+		const isGroupSource = isGroupPointcloudSource(viewer);
 		
 		for(const pointcloud of this.viewer.scene.pointclouds){
 			const {material} = pointcloud;
@@ -113,9 +113,8 @@ export class PotreeRenderer {
 				material.cameraPosition = camera.position;
 				material.uNear = nearestDistance;
 				material.uFar = farthestDistance;
-				material.uXrayUseDistanceRamp = xrayUseDistanceRamp;
-				// 多点云 XRAY 透明度由距离和层级共同驱动，单点云仍沿用原有 distance ramp。
-				material.uXrayMultiOpacity = getPointcloudMultiXrayOpacity(pointcloud, camera.position, bbox);
+				// Use the same XRay opacity policy when the splat pipeline is unavailable.
+				applyPointcloudXrayOpacity(material, pointcloud, camera.position, bbox, isGroupSource);
 			}else{
 				material.useXRAY = false;
 				material.opacity = 1.0;

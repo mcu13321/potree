@@ -149,6 +149,13 @@ export function getPointcloudMultiXrayOpacity(pointcloud, cameraPosition, boundi
 	return THREE.MathUtils.clamp(0.01 * distanceFactor * levelFactor, 0.001, 1);
 }
 
+/** Allow a cloud to use per-point depth without changing its group selection behavior. */
+export function applyPointcloudXrayOpacity(material, pointcloud, cameraPosition, boundingBox, isGroupSource){
+	const usesPerPointDepth = pointcloud?.treemindPointCloudSourceMode?.xrayUseDistanceRamp === true;
+	material.uXrayUseDistanceRamp = !isGroupSource || usesPerPointDepth ? 1 : 0;
+	material.uXrayMultiOpacity = usesPerPointDepth ? 0 : getPointcloudMultiXrayOpacity(pointcloud, cameraPosition, boundingBox);
+}
+
 /**
  * 清空点云的基础效果状态。
  * @param {Object} pointcloud

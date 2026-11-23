@@ -367,6 +367,9 @@ describe("Render effect routing", () => {
 			frontDetailStrength: 0.35,
 			colorGamma: 0.55,
 		}));
+		// The fixed draw override is local to XRay; a selection session can still return the native path.
+		const fixed = {nodes: new Map([[pc3, []]]), settings: {densityScale: 3}};
+		viewer.fixedXray = {frame: vi.fn(() => selected ? undefined : fixed)};
 		const renderer = new HQSplatRenderer(viewer);
 
 		renderer.init = vi.fn(() => {
@@ -411,7 +414,8 @@ describe("Render effect routing", () => {
 		expect(renderer._renderPointcloudGroup.mock.calls[0][0].pointclouds).toEqual(selected ? [] : [pc2]);
 		expect(renderer._renderPointcloudGroup.mock.calls[1][0].pointclouds).toEqual(selected ? [pc1, pc2] : [pc1]);
 		expect(renderer.xrayPipeline.renderToTargets.mock.calls[0][0].pointclouds).toEqual([pc3]);
-		expect(renderer.xrayPipeline.resolve).toHaveBeenCalledWith(viewer.getXrayRenderSettings());
+		expect(renderer.xrayPipeline.renderToTargets.mock.calls[0][0].fixedNodes).toBe(selected ? undefined : fixed.nodes);
+		expect(renderer.xrayPipeline.resolve).toHaveBeenCalledWith(selected ? viewer.getXrayRenderSettings() : fixed.settings);
 		expect(renderer._renderNormalizationPass).toHaveBeenCalledTimes(selected ? 1 : 2);
 		if (!selected) expect(renderer._renderNormalizationPass.mock.calls[0][0].useEDL).toBe(false);
 		const edlPass = renderer._renderNormalizationPass.mock.calls.at(-1)[0];
@@ -455,6 +459,21 @@ describe("Render effect routing", () => {
 		renderer.render({ camera: createCamera() });
 
 		expect(pc1.material.uXrayUseDistanceRamp).toBe(1);
+	});
+
+	it.each(["standard", "edl"])("uses per-point depth for opted-in trees in the %s fallback", route => {
+		const tree = createPointcloud("tree", {xrayEnabled: true});
+		tree.treemindPointCloudSourceMode = {sourceKind: "group", xrayUseDistanceRamp: true};
+		const grouped = createPointcloud("grouped", {xrayEnabled: true});
+		const viewer = createViewerForEffectRender([tree, grouped], "group");
+		const camera = createCamera();
+		// Both fallback paths may render an opted-in tree alongside an unmodified group cloud.
+		if(route === "standard") new ViewerPotreeRenderer(viewer).render({camera});
+		else new EDLRenderer(viewer)._configureRegularPointclouds([tree, grouped], camera, true);
+		expect(tree.material.uXrayUseDistanceRamp).toBe(1);
+		expect(tree.material.uXrayMultiOpacity).toBe(0);
+		expect(grouped.material.uXrayUseDistanceRamp).toBe(0);
+		expect(grouped.material.uXrayMultiOpacity).toBe(0.01);
 	});
 
 	it("restores original materials when an HQ pass fails", () => {
