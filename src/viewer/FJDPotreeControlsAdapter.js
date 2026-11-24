@@ -61,6 +61,15 @@ export class FJDPotreeControlsAdapter {
 			this.controls.enabled = false;
 		}
 		this.syncControlsCameraContext();
+		// Optical zoom keeps the reference plane in front of the perspective input camera.
+		const wheel = this.controls.mouseButtons.wheel;
+		this.controls.mouseButtons.wheel = () => {
+			const action = typeof wheel === "function" ? wheel() : wheel;
+			const scene = this.viewer.scene;
+			return action === FJDCameraControls.ACTION.DOLLY && scene?.xrayTopViewCamera
+				&& scene.getActiveCamera() === scene.xrayTopViewCamera
+				? FJDCameraControls.ACTION.ZOOM : action;
+		};
 		this._resolveOrbitPointForControls = this.resolveOrbitPoint.bind(this);
 		this.controls.setOrbitPointResolver(this._resolveOrbitPointForControls);
 		this.controls.setFitReferenceBoundsResolver(this.resolveFitReferenceBounds.bind(this));
@@ -493,7 +502,9 @@ export class FJDPotreeControlsAdapter {
 	// 把活动相机同步给 controls core。
 	syncControlsCameraContext() {
 		if (typeof this.controls.setCamera === "function") {
-			this.controls.setCamera(this.viewer.scene?.getActiveCamera?.());
+			// The temporary X-Ray camera is used for picking and drawing only.
+			const scene = this.viewer.scene;
+			this.controls.setCamera(scene?.getControlCamera?.() ?? scene?.getActiveCamera?.());
 		}
 	}
 

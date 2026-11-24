@@ -9,6 +9,7 @@ import {PotreeRenderer} from "./PotreeRenderer.js";
 import {EDLRenderer} from "./EDLRenderer.js";
 import {HQSplatRenderer} from "./HQSplatRenderer.js";
 import {FixedXray} from "./FixedXray.js";
+import {XrayTopViewCamera} from "./XrayTopViewCamera.js";
 import {isXraySplatPipelineSupported} from "./XraySplatPipeline.js";
 import {
 	areXrayRenderSettingsEqual,
@@ -513,7 +514,8 @@ export class Viewer extends EventDispatcher{
 			return;
 		}
 
-		const activeCamera = scene.getActiveCamera?.();
+		// Synchronize controls with their input camera even during temporary projection.
+		const activeCamera = scene.getControlCamera?.() ?? scene.getActiveCamera?.();
 		if(controls.supportsSetCamera === true && typeof controls.setCamera === "function" && activeCamera){
 			controls.setCamera(activeCamera);
 			return;
@@ -552,6 +554,8 @@ export class Viewer extends EventDispatcher{
 		}
 
 		let oldScene = this.scene;
+		// A reference plane belongs to the scene that generated it.
+		if(this._xrayTopView) this.resetXrayTopViewCamera();
 		this.scene = scene;
 
 		this.dispatchEvent({
@@ -593,6 +597,8 @@ export class Viewer extends EventDispatcher{
 
 	setControls(controls){
 		const previousControls = this.controls;
+		// Release the snap before the new controller takes ownership of input.
+		if(previousControls !== controls && this._xrayTopView?.isAnimating) this.resetXrayTopViewCamera();
 		// viewer 不再识别 FJD 身份，统一改由 controls 自己声明宿主生命周期钩子。
 		this.runControlsActivationHook(controls, previousControls);
 
@@ -644,7 +650,11 @@ export class Viewer extends EventDispatcher{
 
 	setPauseRender (value) {
 		this.pauseRender = value;
-		if(value) this.fixedXray?.pause();
+		if(value){
+			this.fixedXray?.pause();
+			// Re-evaluate from the current pose when a hidden viewer returns.
+			if(this._xrayTopView) this.resetXrayTopViewCamera();
+		}
 	}
 
 	getMinNodeSize () {
@@ -1318,6 +1328,8 @@ export class Viewer extends EventDispatcher{
 	/** Enable axis views only when explicitly requested by the host. */
 	setViewMode(mode, options = {}){
 		if(mode === "3d" && !this.viewModeController) return;
+		// Explicit axis transitions manage their own input state.
+		if(mode !== "3d" && this._xrayTopView?.isAnimating) this.resetXrayTopViewCamera();
 		this.viewModeController ??= new ViewModeController(this);
 		this.viewModeController.setMode(mode, options);
 	}
@@ -1706,7 +1718,49 @@ export class Viewer extends EventDispatcher{
 		this.isFlipYZ = !this.isFlipYZ;
 	}
 	
+	/** Let standalone hosts opt into temporary orthographic X-Ray top views. */
+	setXrayTopViewEnabled(enabled){
+		if(enabled){
+			this._xrayTopView ??= new XrayTopViewCamera();
+		}else if(this._xrayTopView){
+			this.resetXrayTopViewCamera();
+			this._xrayTopView = null;
+		}
+	}
+
+	resetXrayTopViewCamera(){
+		this._xrayTopView.reset();
+		this.scene.xrayTopViewCamera = null;
+	}
+
+	canUseXrayTopViewCamera(visiblePointClouds){
+		const eligibleView = !!this._xrayTopView && !this.pauseRender && !this.scene.overrideCamera
+			&& this.scene.cameraMode === CameraMode.PERSPECTIVE
+			&& this.controls === this.fjdCameraControls && !!this.fjdCameraControls
+			&& this.getViewMode() === "3d" && !this.renderer.xr.isPresenting;
+		if(!eligibleView) return false;
+
+		// Temporary projection affects the whole canvas, so every drawn cloud must use X-Ray.
+		const clouds = visiblePointClouds ?? this.scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc));
+		if(clouds.length === 0) return false;
+		const edlSupported = this.isEDLSupported();
+		return clouds.every(cloud => getPointcloudEffectState(cloud, edlSupported).xrayEnabled)
+			&& this.isXraySplatPipelineSupported();
+	}
+
+	updateXrayTopViewCamera(eligible, delta){
+		if(!this._xrayTopView) return;
+		if(!eligible){
+			this.resetXrayTopViewCamera();
+			return;
+		}
+		const scene = this.scene;
+		scene.xrayTopViewCamera = this._xrayTopView.update(scene.cameraP, this.fjdCameraControls, scene.view.radius, delta);
+	}
+
 	setCameraMode(mode){
+		// An explicit projection change takes precedence over the automatic camera.
+		if(this._xrayTopView && this.scene.cameraMode !== mode) this.resetXrayTopViewCamera();
 		this.scene.cameraMode = mode;
 
 		for(let pointcloud of this.scene.pointclouds) {
@@ -2299,7 +2353,11 @@ export class Viewer extends EventDispatcher{
 
 
 				// SCREEN SIZE
-				if(viewer.scene.cameraMode == CameraMode.PERSPECTIVE) {
+				const xrayCamera = this.scene.xrayTopViewCamera;
+				// Annotation sizing must use the same projection as its screen position.
+				if(xrayCamera && this.scene.getActiveCamera() === xrayCamera){
+					screenSize = Utils.projectedRadiusOrtho(radius, xrayCamera.projectionMatrix, renderAreaSize.x, renderAreaSize.y);
+				}else if(viewer.scene.cameraMode == CameraMode.PERSPECTIVE) {
 					let fov = Math.PI * viewer.scene.cameraP.fov / 180;
 					let slope = Math.tan(fov / 2.0);
 					let projFactor =  0.5 * renderAreaSize.y / (slope * distance);
@@ -2404,8 +2462,22 @@ export class Viewer extends EventDispatcher{
 
 		
 		const scene = this.scene;
+		const visiblePointClouds = scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc));
+		const controls = this.getControls();
+		const xrayTopViewEligible = this.canUseXrayTopViewCamera(visiblePointClouds);
+		// Resolve the latest drag and lens before culling with the effective camera.
+		if(xrayTopViewEligible){
+			this.syncControlsContext(controls, scene);
+			const aspect = this.renderArea.clientWidth / this.renderArea.clientHeight;
+			if(Number.isFinite(aspect) && aspect > 0) scene.cameraP.aspect = aspect;
+			scene.cameraP.fov = this.fov;
+			// Only the snap advances the displayed pose until the transition settles.
+			if(!this._xrayTopView.isAnimating) controls.update(delta);
+			scene.cameraP.updateProjectionMatrix();
+		}
+		// Advance the snap once per frame; renderDefault can also refresh the camera without advancing it.
+		this.updateXrayTopViewCamera(xrayTopViewEligible, delta);
 		const camera = scene.getActiveCamera();
-		const visiblePointClouds = this.scene.pointclouds.filter(pc => pc.visible && !isPointCloudRuntimeHidden(pc))
 		
 		Potree.pointLoadLimit = Potree.pointBudget * 2;
 
@@ -2550,15 +2622,22 @@ export class Viewer extends EventDispatcher{
 			if(this.scene.cameraMode == CameraMode.ORTHOGRAPHIC) {
 				camera.near = -camera.far;
 			}
+			// Keep depth uniforms synchronized with the active X-Ray projection.
+			if(camera === scene.xrayTopViewCamera){
+				camera.near = -camera.far;
+				camera.updateProjectionMatrix();
+			}
 		} 
 		
 		this.scene.cameraP.fov = this.fov;
 		
-		let controls = this.getControls();
 		if (this.drivesCameraDirectly(controls)) {
 			// fjd-camera-controls 与 cameraControls 一样直接驱动相机，不能再被 scene.view 覆盖。
-			this.syncControlsContext(controls, scene);
-			controls.update(delta);
+			// FJD may already have advanced before point-cloud visibility was computed.
+			if(!xrayTopViewEligible){
+				this.syncControlsContext(controls, scene);
+				controls.update(delta);
+			}
 		}else if (controls === this.deviceControls) {
 			this.syncControlsContext(controls, scene);
 			controls.update(delta);
@@ -2905,6 +2984,8 @@ export class Viewer extends EventDispatcher{
 			scene.cameraScreenSpace.updateProjectionMatrix();
 		}
 
+		// Explicit render calls can occur between animation frames or immediately after a resize.
+		if(this._xrayTopView) this.updateXrayTopViewCamera(this.canUseXrayTopViewCamera());
 		pRenderer.clear();
 
 		pRenderer.render(this.renderer);

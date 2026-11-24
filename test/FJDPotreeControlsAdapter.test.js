@@ -126,6 +126,24 @@ function createViewer() {
 }
 
 describe("FJDPotreeControlsAdapter", () => {
+	// Mouse wheel uses optical zoom while the rendered scene and input camera differ.
+	it("keeps perspective controls and resolves wheel zoom during the X-Ray snap", () => {
+		const {viewer} = createViewer();
+		const perspective = viewer.scene.getActiveCamera();
+		const ortho = new THREE.OrthographicCamera();
+		const adapter = new FJDPotreeControlsAdapter(viewer);
+		viewer.scene.getControlCamera = () => perspective;
+		viewer.scene.getActiveCamera = () => viewer.scene.xrayTopViewCamera ?? perspective;
+		const wheel = adapter.controls.mouseButtons.wheel;
+		expect(wheel()).toBe(FJDCameraControls.ACTION.DOLLY);
+		viewer.scene.xrayTopViewCamera = ortho;
+		adapter.syncControlsCameraContext();
+		expect(adapter.controls.camera).toBe(perspective);
+		expect(wheel()).toBe(FJDCameraControls.ACTION.ZOOM);
+		viewer.scene.xrayTopViewCamera = null;
+		expect(wheel()).toBe(FJDCameraControls.ACTION.DOLLY);
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 		document.body.innerHTML = "";

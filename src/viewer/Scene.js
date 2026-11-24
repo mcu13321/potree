@@ -26,6 +26,8 @@ export class Scene extends EventDispatcher{
 		this.cameraScreenSpace = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 		this.cameraMode = CameraMode.PERSPECTIVE;
 		this.overrideCamera = null;
+		// Automatic X-Ray projection is independent of the configured camera mode.
+		this.xrayTopViewCamera = null;
 		this.pointclouds = [];
 		this.groupOffsets = new Map();
 		this.activePointCloudTransformOffset = null;
@@ -622,7 +624,14 @@ export class Scene extends EventDispatcher{
 	}
 
 	getActiveCamera() {
+		if(!this.overrideCamera && this.cameraMode === CameraMode.PERSPECTIVE && this.xrayTopViewCamera){
+			return this.xrayTopViewCamera;
+		}
+		return this.getControlCamera();
+	}
 
+	// Controls retain the configured camera so a continuing drag can leave the snap.
+	getControlCamera() {
 		if(this.overrideCamera){
 			return this.overrideCamera;
 		}
