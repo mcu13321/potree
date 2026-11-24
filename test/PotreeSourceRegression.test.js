@@ -4,6 +4,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("Potree source regression", () => {
+	it("creates the control-point crop only when the host calls the preview API", () => {
+		// A default Viewer must not mount crop UI or allocate crop state.
+		const viewer = readFileSync("src/viewer/viewer.js", "utf8");
+		const preview = viewer.indexOf("setControlPointCropPreview (state)");
+		expect(preview).toBeGreaterThan(0);
+		expect(viewer.slice(0, preview)).not.toContain("new ControlPointCropTool");
+		expect(viewer.slice(preview)).toContain("new ControlPointCropTool(this)");
+	});
 	it("exports the opt-in box tool without enabling it in existing viewers", () => {
 		// Existing height clipping keeps its original viewer initialization path.
 		const source = readFileSync("src/Potree.js", "utf8");

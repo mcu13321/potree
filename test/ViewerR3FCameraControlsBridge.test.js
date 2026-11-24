@@ -351,11 +351,11 @@ describe("Viewer R3F camera-controls 桥接", () => {
 			},
 		};
 		const pointcloud = {visible: true, userData: {}};
-		const fitToTopViewBox = vi.fn();
 		const controls = {
 			usesRigidTopViewFit: true,
 			camera: {isPerspectiveCamera: true, zoom: 2},
-			fitToTopViewBox,
+			// The fit targets a neutral lens while its first frame keeps the current zoom.
+			fitToTopViewBox: vi.fn(() => expect(controls.camera.zoom).toBe(1)),
 			getPosition(target) {
 				return target.set(0, 0, 20);
 			},
@@ -374,8 +374,8 @@ describe("Viewer R3F camera-controls 桥接", () => {
 
 		Viewer.prototype.setTopView4CameraControls.call(viewerLike, true, options);
 
-		expect(fitToTopViewBox).toHaveBeenCalledWith(box, true, options);
-		expect(controls.camera.zoom).toBe(1);
+		expect(controls.fitToTopViewBox).toHaveBeenCalledWith(box, true, options);
+		expect(controls.camera.zoom).toBe(2);
 		expect(viewerLike.scene.view.radius).toBe(10);
 	});
 });

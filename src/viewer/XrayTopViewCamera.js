@@ -4,6 +4,8 @@ const WORLD_UP = new Vector3(0, 0, 1);
 // Leave a wider release angle so small movements do not restart the transition.
 const SNAP_DOT = Math.cos(6 * Math.PI / 180);
 const RELEASE_DOT = Math.cos(9 * Math.PI / 180);
+// Switch projection near vertical, before the fit finishes its slow damping tail.
+const FIT_SNAP_DOT = Math.cos(Math.PI / 180);
 const SNAP_DURATION = 0.4;
 const IDENTITY_ROTATION = new Quaternion();
 const DOT_EPSILON = 1e-12;
@@ -26,7 +28,23 @@ export class XrayTopViewCamera {
 	reset(){
 		this.referenceZ = null;
 		this.elapsed = 0;
+		this.fitting = false;
 		this.releaseControls();
+	}
+
+	/** Hand a visible snap pose back to the controls before an explicit top-view fit. */
+	prepareFit(controls){
+		this.fitting = true;
+		if(this.referenceZ === null) return;
+
+		this.releaseControls();
+		const pose = controls.getRigidPose(false);
+		pose.position = this.camera.position.toArray();
+		pose.quaternion = this.camera.quaternion.toArray();
+		// Start with the same projection scale, then follow the fit's orbit height.
+		pose.orbitPoint[2] = this.referenceZ;
+		controls.setRigidPose(pose, false);
+		this.elapsed = SNAP_DURATION;
 	}
 
 	lockControls(controls){
@@ -47,8 +65,14 @@ export class XrayTopViewCamera {
 
 	// Only the viewer update loop passes a delta; direct renders reuse the current progress.
 	update(perspective, controls, fallbackDistance, delta = 0){
+		const fitting = this.fitting;
 		const back = this.back.copy(WORLD_UP).applyQuaternion(perspective.quaternion);
 		const entering = this.referenceZ === null;
+		if(fitting){
+			this.fitting = controls.active;
+			if(entering && this.fitting && back.z < FIT_SNAP_DOT - DOT_EPSILON) return null;
+			if(!entering) this.referenceZ = controls.getTarget(this.target, false).z;
+		}
 		if(!Number.isFinite(back.z) || (entering ? back.z < SNAP_DOT - DOT_EPSILON : back.z <= RELEASE_DOT + DOT_EPSILON)){
 			this.reset();
 			return null;
@@ -57,15 +81,16 @@ export class XrayTopViewCamera {
 		const position = perspective.position;
 		if(entering){
 			controls.getTarget(this.target, false);
+			const targetZ = this.target.z;
 			const targetDepth = this.target.sub(position).dot(back) * -1;
 			const distance = targetDepth > Number.EPSILON ? targetDepth : fallbackDistance;
 			if(!Number.isFinite(distance) || distance <= Number.EPSILON) return null;
-			// Keep the plane stable if the next pointer press picks a different orbit point.
-			this.referenceZ = position.z - back.z * distance;
+			// Reuse the fit's moving reference plane from the first orthographic frame.
+			this.referenceZ = fitting ? targetZ : position.z - back.z * distance;
 			this.camera.far = perspective.far;
 			this.camera.near = -perspective.far;
-			// An already vertical camera has no rotation to animate.
-			if(back.z >= 1 - DOT_EPSILON) this.elapsed = SNAP_DURATION;
+			// The fit already owns the rotation. Only a manual snap may lock its controls.
+			if(fitting || back.z >= 1 - DOT_EPSILON) this.elapsed = SNAP_DURATION;
 			else this.lockControls(controls);
 		}else if(Number.isFinite(delta) && delta > 0){
 			this.elapsed = Math.min(this.elapsed + delta, SNAP_DURATION);
@@ -84,7 +109,9 @@ export class XrayTopViewCamera {
 		// Ease the shortest leveling rotation around the same point on the reference plane.
 		const progress = this.elapsed / SNAP_DURATION;
 		const eased = progress * progress * (3 - 2 * progress);
-		const rotation = this.levelRotation.setFromUnitVectors(back, WORLD_UP).slerp(IDENTITY_ROTATION, 1 - eased);
+		const rotation = fitting
+			? IDENTITY_ROTATION
+			: this.levelRotation.setFromUnitVectors(back, WORLD_UP).slerp(IDENTITY_ROTATION, 1 - eased);
 		const renderBack = this.renderBack.copy(back).applyQuaternion(rotation);
 		camera.position.copy(position).addScaledVector(back, -distance).addScaledVector(renderBack, distance);
 		camera.quaternion.copy(perspective.quaternion).premultiply(rotation);

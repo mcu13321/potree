@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, describe, expect, it, vi} from "vitest";
-import {PerspectiveCamera, Quaternion, Vector3} from "../libs/three.js/build/three.module.js";
+import {Box3, PerspectiveCamera, Quaternion, Vector3} from "../libs/three.js/build/three.module.js";
+import {FJDCameraControls, ensureFJDCameraControlsInstalled} from "../src/FJDCameraControlsHost.js";
 import {CameraMode} from "../src/defines.js";
 import {setPointCloudStationHidden} from "../src/utils/PointCloudLabelAppearance.js";
 import {Scene} from "../src/viewer/Scene.js";
@@ -33,7 +34,42 @@ function setup(){
 	return {perspective, target, controls, snap: new XrayTopViewCamera()};
 }
 
-describe("X-Ray top-view projection", () => {
+// Run the native fit and snap against the same rigid controls used by the viewer.
+function setupFit(){
+	ensureFJDCameraControlsInstalled();
+	const viewer = Object.create(Viewer.prototype);
+	const camera = new PerspectiveCamera(60, 1.5, 0.1, 1000);
+	camera.up.copy(up);
+	camera.position.set(0, -15, 30);
+	camera.lookAt(0, 0, 4);
+	const controls = new FJDCameraControls(camera);
+	const box = new Box3(new Vector3(-10, -8, 0), new Vector3(10, 8, 8));
+	const center = box.getCenter(new Vector3());
+	const scene = Object.assign(Object.create(Scene.prototype), {
+		cameraP: camera,
+		cameraMode: CameraMode.PERSPECTIVE,
+		view: {},
+		pointclouds: [{visible: true, material: {}, userData: {xrayEnabled: true}}],
+		getBoundingBox: () => box.clone(),
+	});
+	viewer.scene = scene;
+	viewer.controls = viewer.fjdCameraControls = controls;
+	viewer.renderer = {xr: {isPresenting: false}};
+	viewer.isXraySplatPipelineSupported = () => true;
+	viewer.getTopViewFitOptions = () => ({viewport: {x: 0.4, y: 0, width: 0.6, height: 1}});
+	viewer.setXrayTopViewEnabled(true);
+	const step = (delta = 1 / 60) => {
+		if (!viewer._xrayTopView.isAnimating) controls.update(delta);
+		camera.updateProjectionMatrix();
+		viewer.updateXrayTopViewCamera(viewer.canUseXrayTopViewCamera(), delta);
+	};
+	const project = () => center.clone().project(scene.getActiveCamera());
+	viewer.setTopView4CameraControls(false);
+	step(0);
+	return {viewer, controls, center, step, project};
+}
+
+describe("Temporary top-view projection", () => {
 	it("snaps at six degrees, holds through small changes and releases at nine degrees", () => {
 		const {perspective, controls, snap} = setup();
 		const expected = [false, true, true, false, false, true, false];
@@ -147,10 +183,10 @@ describe("X-Ray top-view projection", () => {
 		expect(ortho.position.x).toBeCloseTo(13);
 	});
 
-	it("uses temporary projection only when all visible clouds use X-Ray", () => {
+	it("uses temporary projection only when all visible clouds use supported X-Ray", () => {
 		const {perspective, controls} = setup();
 		const viewer = Object.create(Viewer.prototype);
-		const cloud = {visible: true, material: {}, userData: {xrayEnabled: true}};
+		const cloud = {visible: true, material: {}, userData: {}};
 		const scene = Object.assign(Object.create(Scene.prototype), {
 			cameraP: perspective,
 			cameraO: {isOrthographicCamera: true},
@@ -171,45 +207,52 @@ describe("X-Ray top-view projection", () => {
 		perspectiveActive();
 		viewer.setXrayTopViewEnabled(true);
 		update();
+		perspectiveActive();
+		cloud.userData.edlEnabled = true;
+		update();
+		perspectiveActive();
+		cloud.userData.edlEnabled = false;
+		cloud.userData.xrayEnabled = true;
+		update();
 		orthoActive();
 		expect(scene.getControlCamera()).toBe(perspective);
 		const consumer = {supportsSetCamera: true, setCamera: vi.fn()};
 		viewer.syncControlsContext(consumer);
 		expect(consumer.setCamera).toHaveBeenCalledWith(perspective);
 
-		// A mixed scene still uses the X-Ray renderer for its X-Ray layer.
-		const other = {visible: true, material: {}, userData: {xrayEnabled: false}};
+		// Direct-blend fallback keeps the regular perspective camera.
+		viewer.isXraySplatPipelineSupported = () => false;
+		update();
+		perspectiveActive();
+		viewer.isXraySplatPipelineSupported = () => true;
+		update();
+		orthoActive();
+
+		// A mixed view still renders its X-Ray layer without changing the canvas projection.
+		const other = {visible: true, material: {}, userData: {edlEnabled: true}};
 		scene.pointclouds.push(other);
 		expect(viewer.hasVisibleXRAYEffectPointclouds()).toBe(true);
 		update();
 		perspectiveActive();
-		other.userData.edlEnabled = true;
-		update();
-		perspectiveActive();
-		other.visible = false;
-		update();
-		orthoActive();
-		other.visible = true;
 		setPointCloudStationHidden(other, viewer, true);
 		update();
 		orthoActive();
-		setPointCloudStationHidden(other, viewer, false);
-		other.userData.edlEnabled = false;
-		other.userData.xrayEnabled = true;
-		update();
-		orthoActive();
-		scene.pointclouds.pop();
 
-		cloud.userData.xrayEnabled = false;
-		update();
-		perspectiveActive();
-		cloud.userData.xrayEnabled = true;
-		update();
-		orthoActive();
+		// A hidden X-Ray layer cannot keep the snap active.
 		cloud.visible = false;
 		update();
 		perspectiveActive();
 		cloud.visible = true;
+		update();
+		orthoActive();
+		viewer.pauseRender = true;
+		update();
+		perspectiveActive();
+		viewer.pauseRender = false;
+		viewer.renderer.xr.isPresenting = true;
+		update();
+		perspectiveActive();
+		viewer.renderer.xr.isPresenting = false;
 		update();
 		orthoActive();
 		viewer.setCameraMode(CameraMode.ORTHOGRAPHIC);
@@ -220,5 +263,46 @@ describe("X-Ray top-view projection", () => {
 		orthoActive();
 		viewer.setXrayTopViewEnabled(false);
 		perspectiveActive();
+	});
+
+	it("keeps the wheel zoom visible on the first frame of an animated reset", () => {
+		const {viewer, controls, step, project} = setupFit();
+		controls.zoomTo(0.7, false);
+		step(0);
+		const before = project();
+		const topBefore = viewer.scene.getActiveCamera().top;
+		viewer.setTopView4CameraControls(true);
+		viewer.updateXrayTopViewCamera(true);
+		expect(viewer.scene.cameraP.zoom).toBe(0.7);
+		expect(viewer.scene.getActiveCamera().top).toBeCloseTo(topBefore);
+		expect(project().x).toBeCloseTo(before.x);
+		for (let i = 0; i < 150; i++) step();
+		expect(viewer.scene.cameraP.zoom).toBe(1);
+		expect(project().x).toBeCloseTo(0.4);
+	});
+
+	it("switches projection near the end of a reset while the fit still owns the pose", () => {
+		const {viewer, controls, step, project} = setupFit();
+		controls.setLookAt(8, -15, 30, 0, 0, 4, false);
+		step(0);
+		expect(viewer.scene.getActiveCamera().isPerspectiveCamera).toBe(true);
+		viewer.setTopView4CameraControls(true);
+		let handedOff = false;
+		for (let i = 0; i < 300 && controls.active; i++) {
+			step();
+			// The projection can change while the fit continues moving the same controls.
+			expect(controls.enabled).toBe(true);
+			if (!handedOff && viewer.scene.getActiveCamera().isOrthographicCamera) {
+				const back = up.clone().applyQuaternion(viewer.scene.cameraP.quaternion);
+				expect(back.z).toBeGreaterThanOrEqual(Math.cos(toRadians(1)) - 1e-12);
+				expect(controls.active).toBe(true);
+				handedOff = true;
+			}
+		}
+		expect(handedOff).toBe(true);
+		expect(controls.active).toBe(false);
+		expect(viewer.scene.getActiveCamera().isOrthographicCamera).toBe(true);
+		expect(project().x).toBeCloseTo(0.4, 6);
+		expect(project().y).toBeCloseTo(0, 6);
 	});
 });

@@ -1,6 +1,7 @@
 
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {withPointCloudLabelColor, isPointCloudRuntimeHidden} from "./utils/PointCloudLabelAppearance.js";
+import {getControlPointCropVolume} from "./utils/control-point-crop/controlPointCropVolume.js";
 import {PointCloudTree} from "./PointCloudTree.js";
 import {PointCloudOctreeNode} from "./PointCloudOctree.js";
 import {PointCloudArena4DNode} from "./arena4d/PointCloudArena4D.js";
@@ -1079,6 +1080,8 @@ export class Renderer {
 		let gl = this.gl;
 
 		let material = params.material ? params.material : octree.material;
+		// Use the same spatial filter in regular, offscreen and picking passes.
+		const controlCrop = getControlPointCropVolume(octree);
 		let shadowMaps = params.shadowMaps == null ? [] : params.shadowMaps;
 		let view = camera.matrixWorldInverse;
 		let viewInv = camera.matrixWorld;
@@ -1138,6 +1141,7 @@ export class Renderer {
 					`#define num_clipspheres ${numClipSpheres}`,
 					`#define num_clippolygons ${numClipPolygons}`,
 				];
+				if (controlCrop) defines.push(`#define num_control_crop_vertices ${controlCrop.count}`);
 
 
 				if(octree.pcoGeometry.root.isLoaded()){
@@ -1286,6 +1290,10 @@ export class Renderer {
 			}
 
 			shader.setUniform1i("clipMethod", material.clipMethod);
+			if (controlCrop) {
+				shader.setUniform2f("uControlCropHeight", controlCrop.range);
+				gl.uniform2fv(shader.uniformLocations["uControlCropVertices[0]"], controlCrop.vertices);
+			}
 
 			if (material.clipBoxes && material.clipBoxes.length > 0) {
 				//let flattenedMatrices = [].concat(...material.clipBoxes.map(c => c.inverse.elements));

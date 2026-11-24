@@ -45,6 +45,10 @@ uniform float uOrthoHeight;
 #define CLIPMETHOD_INSIDE_ALL 1
 
 uniform int clipTask;
+#ifdef num_control_crop_vertices
+	uniform vec2 uControlCropHeight;
+	uniform vec2 uControlCropVertices[num_control_crop_vertices + 1];
+#endif
 uniform int clipMethod;
 #if defined(num_clipboxes) && num_clipboxes > 0
 	uniform mat4 clipBoxes[num_clipboxes];
@@ -862,7 +866,38 @@ void doClipping(){
 // ##     ## ##     ## #### ##    ## 
 //
 
+#ifdef num_control_crop_vertices
+// Use the world-space XY perimeter and include points lying on the prism faces.
+bool insideControlPointCrop(vec3 point) {
+	const float epsilon = 0.00001;
+	if (point.z < uControlCropHeight.x - epsilon || point.z > uControlCropHeight.y + epsilon) return false;
+	bool inside = false;
+	for (int i = 0; i < num_control_crop_vertices; i++) {
+		vec2 a = uControlCropVertices[i];
+		vec2 b = uControlCropVertices[i + 1];
+		vec2 edge = b - a;
+		vec2 offset = point.xy - a;
+		float cross = edge.x * offset.y - edge.y * offset.x;
+		if (abs(cross) <= epsilon * length(edge)
+			&& all(greaterThanEqual(point.xy, min(a, b) - vec2(epsilon)))
+			&& all(lessThanEqual(point.xy, max(a, b) + vec2(epsilon)))) return true;
+		if ((a.y > point.y) != (b.y > point.y)) {
+			float crossing = a.x + offset.y * edge.x / edge.y;
+			if (point.x < crossing) inside = !inside;
+		}
+	}
+	return inside;
+}
+#endif
+
 void main() {
+	#ifdef num_control_crop_vertices
+		if (!insideControlPointCrop((modelMatrix * vec4(position, 1.0)).xyz)) {
+			gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+			gl_PointSize = 1.0;
+			return;
+		}
+	#endif
 	vec4 mvPosition = modelViewMatrix * vec4(position, 1.0 );
 	vViewPosition = mvPosition.xyz;
 	gl_Position = projectionMatrix * mvPosition;

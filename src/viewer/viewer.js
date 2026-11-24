@@ -41,6 +41,7 @@ import {CadVectorTool} from "../utils/CadVectorTool.js";
 import {CrossSectionPreviewTool} from "../utils/CrossSectionPreviewTool.js";
 import {AxisLineMarkerTool} from "../utils/AxisLineMarkerTool.js";
 import {TrackPointTool} from "../utils/TrackPointTool.js";
+import {ControlPointCropTool} from "../utils/ControlPointCropTool.js";
 import {DefectMarkerTool} from "../utils/DefectMarkerTool.js";
 import {RectangleSVGTool} from "../utils/RectangleSVGTool.js";
 import {PolygonSVGTool} from "../utils/PolygonSVGTool.js";
@@ -856,6 +857,32 @@ export class Viewer extends EventDispatcher{
 		this.trackPointTool?.clear();
 	};
 
+	/** Explicitly show labels and preview a clip in the current scene. */
+	setControlPointCropPreview (state) {
+		if (!Array.isArray(state?.points) || !state.points.every(Boolean)
+			|| !Number.isFinite(state.zMin) || !Number.isFinite(state.zMax)) return false;
+		if (!this.controlPointCropTool) this.controlPointCropTool = new ControlPointCropTool(this);
+		this.controlPointCropTool.setPreview(state);
+		return true;
+	}
+
+	/** Keep only the confirmed filter while closing the preview overlay. */
+	confirmControlPointCrop () {
+		return this.controlPointCropTool?.confirm() ?? false;
+	}
+
+	/** Remove the draft and restore the previously confirmed filter, if any. */
+	cancelControlPointCrop () {
+		if (this.controlPointCropTool?.confirmed) this.controlPointCropTool.cancel();
+		else this.clearControlPointCrop();
+	}
+
+	/** Release both draft and confirmed state when leaving the scene. */
+	clearControlPointCrop () {
+		this.controlPointCropTool?.dispose();
+		this.controlPointCropTool = null;
+	}
+
 	/** Replace the defect markers rendered by the Potree-owned HTML overlay. */
 	setDefectMarkerData (markers) {
 		this.defectMarkerTool?.setData(markers);
@@ -1473,9 +1500,7 @@ export class Viewer extends EventDispatcher{
 					? visiblePointclouds
 						: this.scene.pointclouds);
 		let box = this.getBoundingBox(pointcloudsForBox );
-		if (activeControls?.camera?.isPerspectiveCamera) {
-			activeControls.camera.zoom = 1;
-		}
+		const camera = activeControls?.camera;
 		this.scene.view.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
 
 		if (
@@ -1483,8 +1508,23 @@ export class Viewer extends EventDispatcher{
 			typeof activeControls.fitToTopViewBox === "function"
 		) {
 			// fjd-controls 走刚体相机模型，直接切到包围盒顶视图位姿。
-			activeControls.fitToTopViewBox(box, animation, options);
+			if (this._xrayTopView && activeControls === this.fjdCameraControls && this.canUseXrayTopViewCamera()) {
+				this._xrayTopView.prepareFit(activeControls);
+			}
+			// Compute the fit for its destination lens, then render the current interpolated lens.
+			const startZoom = camera?.zoom;
+			if (camera?.isPerspectiveCamera) camera.zoom = 1;
+			try {
+				activeControls.fitToTopViewBox(box, animation, options);
+			} finally {
+				if (camera?.isPerspectiveCamera) {
+					camera.zoom = activeControls.getRigidPose?.(false)?.zoom ?? (animation ? startZoom : 1);
+					camera.updateProjectionMatrix?.();
+				}
+			}
 		} else {
+			// Preserve the legacy controls' immediate projection reset.
+			if (camera?.isPerspectiveCamera) camera.zoom = 1;
 			// 旧 cameraControls 继续沿用原有 top-view 链路，避免影响现有项目。
 			activeControls.normalizeRotations().reset(animation);
 			activeControls.fitToBox(box, animation);
@@ -2622,7 +2662,7 @@ export class Viewer extends EventDispatcher{
 			if(this.scene.cameraMode == CameraMode.ORTHOGRAPHIC) {
 				camera.near = -camera.far;
 			}
-			// Keep depth uniforms synchronized with the active X-Ray projection.
+			// Keep depth uniforms synchronized with the temporary orthographic projection.
 			if(camera === scene.xrayTopViewCamera){
 				camera.near = -camera.far;
 				camera.updateProjectionMatrix();
