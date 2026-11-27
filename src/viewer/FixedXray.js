@@ -189,7 +189,8 @@ export class FixedXray{
 		const cut = chooseXrayCut(state.levels, state.target, state.ceiling);
 		if(!cut) throw new Error("No drawable XRay level");
 		state.needsPlan = false;
-		const limit = Math.min(cut.points, state.ceiling);
+		// Read complete source nodes, then sample each region to the initial draw budget.
+		const limit = Math.min(cut.points, state.target, state.ceiling);
 		if(state.ready && state.cut?.level === cut.level && state.cut.strategy === cut.strategy &&
 			state.cutLimit === limit && recordCount(state.records) <= state.ceiling) return;
 		const selected = cut.strategy === "single" ? state.levels[cut.level] : state.levels.slice(0, cut.level + 1).flat();
